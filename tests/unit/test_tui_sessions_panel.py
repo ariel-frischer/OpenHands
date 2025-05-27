@@ -182,19 +182,68 @@ class TestSessionsPanel:
         mock_session_manager.create_session.return_value = "new_session_id"
         
         with patch.object(sessions_panel, 'update_sessions') as mock_update:
-            await sessions_panel.create_new_session()
+            await sessions_panel._create_session_async("New session - ready for your first message")
         
-        mock_session_manager.create_session.assert_called_once_with("New session")
+        mock_session_manager.create_session.assert_called_once_with("New session - ready for your first message")
         mock_update.assert_called_once()
     
+    def test_create_new_session_sync(self, sessions_panel):
+        """Test synchronous create_new_session method."""
+        with patch('asyncio.create_task') as mock_create_task:
+            with patch('asyncio.get_running_loop') as mock_get_loop:
+                mock_loop = MagicMock()
+                mock_get_loop.return_value = mock_loop
+                
+                sessions_panel.create_new_session()
+                
+                # Should create async task
+                mock_create_task.assert_called_once()
+                # Should get event loop
+                mock_get_loop.assert_called_once()
+
+    def test_create_new_session_sync_no_loop(self, sessions_panel):
+        """Test synchronous create_new_session method when no event loop exists."""
+        with patch('asyncio.run') as mock_run:
+            with patch('asyncio.get_running_loop', side_effect=RuntimeError("No event loop")):
+                sessions_panel.create_new_session()
+                
+                # Should run in new loop
+                mock_run.assert_called_once()
+
     @pytest.mark.asyncio
-    async def test_create_new_session_failure(self, sessions_panel, mock_session_manager):
-        """Test creating new session with failure."""
+    async def test_create_session_async_success(self, sessions_panel, mock_session_manager):
+        """Test async session creation successfully."""
+        mock_session_manager.create_session.return_value = "new_session_id"
+        mock_session_manager.event_manager = MagicMock()
+        mock_session_manager.event_manager.subscribe_to_session = MagicMock()
+        
+        with patch.object(sessions_panel, 'update_sessions') as mock_update:
+            await sessions_panel._create_session_async("Test task")
+        
+        mock_session_manager.create_session.assert_called_once_with("Test task")
+        mock_session_manager.event_manager.subscribe_to_session.assert_called_once_with("new_session_id")
+        mock_update.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_session_async_no_event_manager(self, sessions_panel, mock_session_manager):
+        """Test async session creation when no event manager available."""
+        mock_session_manager.create_session.return_value = "new_session_id"
+        # No event_manager attribute
+        
+        with patch.object(sessions_panel, 'update_sessions') as mock_update:
+            await sessions_panel._create_session_async("Test task")
+        
+        mock_session_manager.create_session.assert_called_once_with("Test task")
+        mock_update.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_session_async_failure(self, sessions_panel, mock_session_manager):
+        """Test async session creation with failure."""
         mock_session_manager.create_session.side_effect = Exception("Creation failed")
         
         with patch.object(sessions_panel, 'update_sessions') as mock_update:
             # Should not raise exception
-            await sessions_panel.create_new_session()
+            await sessions_panel._create_session_async("Test task")
         
         mock_session_manager.create_session.assert_called_once()
         mock_update.assert_not_called()
@@ -250,30 +299,37 @@ class TestSessionsPanel:
     def test_handle_key_event_new_session(self, sessions_panel):
         """Test handling 'n' key for new session."""
         with patch.object(sessions_panel, 'create_new_session') as mock_create:
-            with patch('asyncio.create_task') as mock_task:
-                result = sessions_panel.handle_key_event("n")
+            result = sessions_panel.handle_key_event("n")
         
         assert result is True
-        mock_task.assert_called_once()
+        mock_create.assert_called_once()
     
     def test_handle_key_event_delete_session(self, sessions_panel, mock_session_manager, sample_sessions):
         """Test handling 'd' key for deleting session."""
         mock_session_manager.get_active_session.return_value = sample_sessions[0]
         
-        with patch.object(sessions_panel, 'close_session') as mock_close:
-            with patch('asyncio.create_task') as mock_task:
+        with patch('asyncio.create_task') as mock_task:
+            with patch('asyncio.get_running_loop') as mock_get_loop:
+                mock_loop = MagicMock()
+                mock_get_loop.return_value = mock_loop
+                
                 result = sessions_panel.handle_key_event("d")
         
         assert result is True
         mock_task.assert_called_once()
+        # Verify the task was created with a coroutine
+        args, kwargs = mock_task.call_args
+        assert len(args) == 1
+        # The argument should be a coroutine
+        import inspect
+        assert inspect.iscoroutine(args[0])
     
     def test_handle_key_event_delete_no_active_session(self, sessions_panel, mock_session_manager):
         """Test handling 'd' key with no active session."""
         mock_session_manager.get_active_session.return_value = None
         
-        with patch.object(sessions_panel, 'close_session') as mock_close:
-            with patch('asyncio.create_task') as mock_task:
-                result = sessions_panel.handle_key_event("d")
+        with patch('asyncio.create_task') as mock_task:
+            result = sessions_panel.handle_key_event("d")
         
         assert result is True
         mock_task.assert_not_called()

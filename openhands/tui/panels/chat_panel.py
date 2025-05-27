@@ -3,12 +3,15 @@
 Right panel showing chat interface with responsive layout and message display.
 """
 
+import asyncio
 import textwrap
+import time
 from typing import TYPE_CHECKING, Union
 
 import pytermgui as ptg
 
 from openhands.core.logger import openhands_logger as logger
+from openhands.core.schema import AgentState
 from openhands.events.action import MessageAction
 from openhands.events.event import Event
 from openhands.events.observation import CmdOutputObservation
@@ -37,6 +40,10 @@ class ChatPanel(BasePanel):
         """
         super().__init__(session_manager, file_manager, "Chat")
         self.event_manager = event_manager
+        self._last_button_click = 0  # For button debouncing
+        self._sending_message = False  # Prevent multiple simultaneous message sending
+        
+        logger.debug(f"ChatPanel initialized with dimensions: {getattr(self, 'width', 'unknown')}x{getattr(self, 'height', 'unknown')}")
         
         # Chat history display with responsive sizing
         self.chat_display = ptg.Container()
@@ -50,11 +57,15 @@ class ChatPanel(BasePanel):
         # Bind Enter key to send message
         self.input_field.bind(ptg.keys.ENTER, self.send_message)
         
-        self.send_button = ptg.Button("Send", self.send_message)
+        self.send_button = ptg.Button("Send", self.send_message_sync)
         self.pause_button = ptg.Button("Pause", self.pause_agent)
+        
+        # Status indicator for session readiness
+        self.status_label = ptg.Label("[dim]No session active[/dim]")
         
         # Input container with horizontal layout
         input_container = ptg.Container(
+            self.status_label,
             self.input_field,
             ptg.Container(
                 self.send_button,
@@ -86,6 +97,10 @@ class ChatPanel(BasePanel):
             if active_session:
                 session_id = active_session.sid
             else:
+                # No active session - clear display and show status
+                self.chat_display._widgets.clear()
+                self.chat_display += ptg.Label("[dim]No active session. Create a new session to start chatting.[/dim]")
+                self.status_label.value = "[dim]No session active[/dim]"
                 return
         
         self.update_chat_display(session_id)
@@ -101,14 +116,18 @@ class ChatPanel(BasePanel):
         session = self.session_manager.get_session(session_id)
         if not session:
             logger.warning(f"Session {session_id} not found")
+            self.status_label.value = "[dim]No session active[/dim]"
             return
+        
+        # Update status label based on session state
+        self.update_status_label(session)
         
         # Clear existing messages
         self.chat_display._widgets.clear()
         
         # Calculate available height for the chat_display container
-        # Panel height - title(1) - spacer(1) - input_field(1) - button_container(1) - bottom_spacer(1) = self.height - 5
-        chat_display_container_height = max(1, self.height - 5)
+        # Panel height - title(1) - spacer(1) - status_label(1) - input_field(1) - button_container(1) - bottom_spacer(1) = self.height - 6
+        chat_display_container_height = max(1, self.height - 6)
         
         # Add messages from event stream with responsive layout
         if session.event_stream:
@@ -136,6 +155,27 @@ class ChatPanel(BasePanel):
         # Update chat file for Ctrl+E
         messages = self.get_chat_messages(session_id)
         self.file_manager.update_chat_file(session_id, messages)
+    
+    def update_status_label(self, session) -> None:
+        """Update the status label based on session state.
+        
+        Args:
+            session: Session context to get state from
+        """
+        from openhands.core.schema import AgentState
+        
+        if session.agent_state == AgentState.LOADING:
+            self.status_label.value = "[yellow]⏳ Session loading...[/yellow]"
+        elif session.agent_state == AgentState.AWAITING_USER_INPUT:
+            self.status_label.value = "[green]✅ Ready for messages[/green]"
+        elif session.agent_state == AgentState.RUNNING:
+            self.status_label.value = "[blue]🔥 Agent working...[/blue]"
+        elif session.agent_state == AgentState.STOPPED:
+            self.status_label.value = "[red]⏹️ Session stopped[/red]"
+        elif session.agent_state == AgentState.ERROR:
+            self.status_label.value = "[red]❌ Session error[/red]"
+        else:
+            self.status_label.value = f"[dim]❓ Unknown state: {session.agent_state}[/dim]"
     
     def create_message_widget(self, event: Event) -> Union[ptg.Widget, None]:
         """Create widget for chat message with responsive text wrapping.
@@ -248,18 +288,152 @@ class ChatPanel(BasePanel):
         logger.info(f"Sending message: {message[:50]}...")
         
         active_session = self.session_manager.get_active_session()
-        if active_session:
-            # Route message through event manager
-            self.event_manager.route_user_input(active_session.sid, message)
+        if not active_session:
+            logger.info("No active session found, creating a new session automatically")
+            # Create a new session automatically
+            try:
+                # Use the message as the task description for the new session
+                task_description = f"User message: {message[:50]}..." if len(message) > 50 else f"User message: {message}"
+                
+                # Create session synchronously in the background
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                    # Create the session and wait for it to be ready
+                    session_creation_task = asyncio.create_task(self._create_session_and_send_message(task_description, message))
+                    return  # Exit early, the message will be sent after session creation
+                except RuntimeError:
+                    # No running event loop, run in new loop
+                    asyncio.run(self._create_session_and_send_message(task_description, message))
+                    return
+            except Exception as e:
+                logger.error(f"Failed to create new session automatically: {e}")
+                return
+        
+        # Check if session is ready to receive messages
+        if active_session.agent_state not in [AgentState.AWAITING_USER_INPUT, AgentState.RUNNING]:
+            if active_session.agent_state == AgentState.LOADING:
+                logger.warning("Session is still loading. Please wait for it to be ready (✅)")
+            elif active_session.agent_state == AgentState.ERROR:
+                logger.warning("Session is in error state. Please create a new session.")
+            elif active_session.agent_state == AgentState.STOPPED:
+                logger.warning("Session is stopped. Please create a new session.")
+            else:
+                logger.warning(f"Session is not ready (state: {active_session.agent_state})")
+            return
+        
+        # Route message through event manager
+        try:
+            success = self.event_manager.route_user_input(active_session.sid, message)
+            if success:
+                # Clear input field only if message was sent successfully
+                if self.input_field.value:
+                    self.input_field.delete_back(len(self.input_field.value))
+                
+                # Update display
+                self.update_chat_display(active_session.sid)
+            else:
+                logger.error("Failed to send message - event manager returned False")
+        except Exception as e:
+            logger.error(f"Failed to send message to session {active_session.sid}: {e}")
+            # Don't clear input field so user can retry
+    
+    async def _create_session_and_send_message(self, task_description: str, message: str) -> None:
+        """Create a new session and send the first message to it.
+        
+        Args:
+            task_description: Description for the new session
+            message: Message to send after session creation
+        """
+        try:
+            logger.info(f"Creating new session with task: {task_description}")
             
-            # Clear input field
-            if self.input_field.value:
-                self.input_field.delete_back(len(self.input_field.value))
+            # Create the session
+            session_id = await self.session_manager.create_session(task_description)
+            logger.info(f"Created session {session_id}, subscribing to events")
             
-            # Update display
-            self.update_chat_display(active_session.sid)
-        else:
-            logger.warning("No active session to send message to")
+            # Subscribe to session events
+            if hasattr(self.session_manager, 'event_manager'):
+                self.session_manager.event_manager.subscribe_to_session(session_id)
+            
+            # Start the session
+            logger.info(f"Starting session {session_id}")
+            await self.session_manager.start_session(session_id)
+            logger.info(f"Session {session_id} started, now sending message")
+            
+            # Now send the message
+            success = self.event_manager.route_user_input(session_id, message)
+            if success:
+                logger.info(f"Successfully sent message to new session {session_id}")
+                # Clear input field
+                if self.input_field.value:
+                    self.input_field.delete_back(len(self.input_field.value))
+                
+                # Update displays
+                self.update_chat_display(session_id)
+                
+                # Update other panels
+                if hasattr(self.session_manager, 'event_manager') and hasattr(self.session_manager.event_manager, 'tui_app'):
+                    tui_app = self.session_manager.event_manager.tui_app
+                    if tui_app:
+                        if hasattr(tui_app, 'sessions_panel'):
+                            tui_app.sessions_panel.update_display()
+                        if hasattr(tui_app, 'logs_panel'):
+                            tui_app.logs_panel.update_display()
+            else:
+                logger.error("Failed to send message to new session")
+                
+        except Exception as e:
+            logger.error(f"Failed to create session and send message: {e}", exc_info=True)
+    
+    def send_message_sync(self, *args) -> None:
+        """Synchronous wrapper for send_message to work with PyTermGUI buttons.
+        
+        Args:
+            *args: Arguments from PyTermGUI button callback (ignored)
+        """
+        # Button debouncing - prevent rapid clicks
+        current_time = time.time()
+        if current_time - self._last_button_click < 0.5:  # 0.5 second debounce
+            logger.debug("Send button click ignored due to debouncing")
+            return
+        self._last_button_click = current_time
+        
+        # Prevent multiple simultaneous message sending
+        if self._sending_message:
+            logger.debug("Message sending already in progress")
+            return
+        
+        self._sending_message = True
+        
+        try:
+            # Try to get the running event loop
+            try:
+                loop = asyncio.get_running_loop()
+                # Schedule message sending as a background task with exception handling
+                task = asyncio.create_task(self.send_message())
+                # Add exception handler to prevent unhandled exceptions from crashing TUI
+                task.add_done_callback(self._handle_task_exception)
+            except RuntimeError:
+                # No running event loop, run in new loop
+                asyncio.run(self.send_message())
+        except Exception as e:
+            logger.error(f"Error sending message: {e}", exc_info=True)
+            self._sending_message = False
+    
+    def _handle_task_exception(self, task) -> None:
+        """Handle exceptions from background tasks to prevent TUI crashes."""
+        try:
+            # This will raise the exception if the task failed
+            task.result()
+            logger.debug("Message sending completed successfully")
+        except asyncio.CancelledError:
+            logger.info("Message sending was cancelled")
+        except Exception as e:
+            logger.error(f"Background task failed: {e}", exc_info=True)
+        finally:
+            # Reset the sending message flag
+            self._sending_message = False
     
     async def pause_agent(self) -> None:
         """Pause active session agent."""

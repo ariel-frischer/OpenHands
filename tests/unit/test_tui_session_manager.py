@@ -483,3 +483,117 @@ class TestSessionManager:
         session_manager.mark_session_for_microagent_reload("test-session-123")
         
         assert mock_session_context.reload_microagents == True
+
+
+class TestSessionManagerTUIEnhancements:
+    """Test cases for TUI-specific SessionManager enhancements."""
+
+    @pytest.fixture
+    def mock_config(self):
+        """Create a mock AppConfig."""
+        config = MagicMock()
+        config.sandbox.selected_repo = None
+        config.jwt_secret = "test-secret"
+        return config
+
+    @pytest.fixture
+    def mock_settings_store(self):
+        """Create a mock FileSettingsStore."""
+        return MagicMock(spec=FileSettingsStore)
+
+    @pytest.fixture
+    def session_manager(self, mock_config, mock_settings_store):
+        """Create a SessionManager instance."""
+        return SessionManager(mock_config, mock_settings_store)
+
+    @pytest.fixture
+    def enhanced_session_context(self):
+        """Create a SessionContext with TUI enhancements."""
+        mock_runtime = MagicMock()
+        mock_controller = MagicMock()
+        mock_event_stream = MagicMock()
+        mock_memory = MagicMock()
+        mock_agent = MagicMock()
+        
+        return SessionContext(
+            sid="test-session-123",
+            config=MagicMock(),
+            runtime=mock_runtime,
+            controller=mock_controller,
+            event_stream=mock_event_stream,
+            memory=mock_memory,
+            agent_state=AgentState.AWAITING_USER_INPUT,
+            created_at=datetime.now(),
+            last_activity=datetime.now(),
+            task_description="Test task",
+            agent=mock_agent,
+            repo_directory="/test/repo",
+            reload_microagents=False,
+            error_count=0,
+            last_error=None,
+            is_connected=True,
+            startup_time=5.2,
+            message_count=3,
+        )
+
+    def test_get_session_status(self, session_manager, enhanced_session_context):
+        """Test getting session status information."""
+        session_manager.sessions["test-session-123"] = enhanced_session_context
+        
+        status = session_manager.get_session_status("test-session-123")
+        
+        assert status["sid"] == "test-session-123"
+        assert status["agent_state"] == "awaiting_user_input"
+        assert status["task_description"] == "Test task"
+        assert status["error_count"] == 0
+        assert status["last_error"] is None
+        assert status["is_connected"] is True
+        assert status["startup_time"] == 5.2
+        assert status["message_count"] == 3
+        assert status["repo_directory"] == "/test/repo"
+        assert "uptime_seconds" in status
+        assert "created_at" in status
+        assert "last_activity" in status
+
+    def test_record_session_error(self, session_manager, enhanced_session_context):
+        """Test recording session errors."""
+        session_manager.sessions["test-session-123"] = enhanced_session_context
+        
+        session_manager.record_session_error("test-session-123", "Test error message")
+        
+        assert enhanced_session_context.error_count == 1
+        assert enhanced_session_context.last_error == "Test error message"
+
+    def test_get_session_health_healthy(self, session_manager, enhanced_session_context):
+        """Test getting health for a healthy session."""
+        session_manager.sessions["test-session-123"] = enhanced_session_context
+        
+        health = session_manager.get_session_health("test-session-123")
+        
+        assert health["healthy"] is True
+        assert health["checks"]["session_exists"] is True
+        assert health["checks"]["runtime_connected"] is True
+        assert health["checks"]["agent_state_valid"] is True
+
+    def test_get_session_summary(self, session_manager):
+        """Test getting session summary."""
+        # Create sessions with different states
+        session1 = MagicMock()
+        session1.agent_state = AgentState.RUNNING
+        session2 = MagicMock()
+        session2.agent_state = AgentState.AWAITING_USER_INPUT
+        session3 = MagicMock()
+        session3.agent_state = AgentState.ERROR
+        
+        session_manager.sessions["session1"] = session1
+        session_manager.sessions["session2"] = session2
+        session_manager.sessions["session3"] = session3
+        session_manager.active_session_id = "session1"
+        
+        summary = session_manager.get_session_summary()
+        
+        assert summary["total_sessions"] == 3
+        assert summary["active_sessions"] == 1
+        assert summary["waiting_sessions"] == 1
+        assert summary["error_sessions"] == 1
+        assert summary["active_session_id"] == "session1"

@@ -1,5 +1,4 @@
-"""
-TUI Event Manager for Session-UI Communication
+"""TUI Event Manager for Session-UI Communication.
 
 This module provides the TUIEventManager class that handles event routing between
 OpenHands sessions and the TUI interface. It adapts the CLI event handling patterns
@@ -38,8 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 class TUIEventManager:
-    """
-    Manages event routing between OpenHands sessions and TUI panels.
+    """Manages event routing between OpenHands sessions and TUI panels.
     
     This class subscribes to event streams from active sessions and routes
     events to appropriate UI panels through the file manager. It also handles
@@ -53,8 +51,7 @@ class TUIEventManager:
         config: AppConfig,
         tui_app: Optional["OpenHandsTUIApp"] = None,
     ):
-        """
-        Initialize the TUI Event Manager.
+        """Initialize the TUI Event Manager.
         
         Args:
             session_manager: Manager for OpenHands sessions
@@ -85,8 +82,7 @@ class TUIEventManager:
         self.streaming_sessions: set[str] = set()
 
     def subscribe_to_session(self, session_id: str) -> None:
-        """
-        Subscribe to events from a specific session's event stream.
+        """Subscribe to events from a specific session's event stream.
         
         Args:
             session_id: ID of the session to subscribe to
@@ -110,7 +106,9 @@ class TUIEventManager:
             try:
                 self._handle_session_event(session_id, event)
             except Exception as e:
-                logger.error(f"Error handling event from session {session_id}: {e}")
+                logger.error(f"Error handling event from session {session_id}: {e}", exc_info=True)
+                # Try to recover from event handling errors
+                self._handle_event_error(session_id, e)
         
         # Subscribe to the session's event stream
         session_context.event_stream.subscribe(
@@ -123,8 +121,7 @@ class TUIEventManager:
         logger.info(f"Subscribed to events from session {session_id}")
 
     def unsubscribe_from_session(self, session_id: str) -> None:
-        """
-        Unsubscribe from events from a specific session.
+        """Unsubscribe from events from a specific session.
         
         Args:
             session_id: ID of the session to unsubscribe from
@@ -146,8 +143,7 @@ class TUIEventManager:
         logger.info(f"Unsubscribed from events from session {session_id}")
 
     def _handle_session_event(self, session_id: str, event: Event) -> None:
-        """
-        Handle an event from a session and route it to appropriate UI panels.
+        """Handle an event from a session and route it to appropriate UI panels.
         
         Args:
             session_id: ID of the session that generated the event
@@ -216,8 +212,24 @@ class TUIEventManager:
         state_message = f"🔄 Agent state: {event.agent_state}\n"
         self.file_manager.update_logs_file(session_id, state_message)
         
+        # Update session context with new agent state
+        session_context = self.session_manager.get_session(session_id)
+        if session_context:
+            session_context.agent_state = event.agent_state
+            logger.debug(f"Updated session {session_id} agent state to {event.agent_state}")
+        
         # Update session activity when state changes
         self.session_manager.update_session_activity(session_id)
+        
+        # Update UI panels immediately for state changes
+        if self.tui_app and session_id == self.session_manager.active_session_id:
+            try:
+                if hasattr(self.tui_app, 'sessions_panel'):
+                    self.tui_app.sessions_panel.update_display()
+                if hasattr(self.tui_app, 'chat_panel'):
+                    self.tui_app.chat_panel.update_display(session_id)
+            except Exception as e:
+                logger.error(f"Error updating UI for state change: {e}")
 
     def _handle_error_observation(self, session_id: str, event: ErrorObservation) -> None:
         """Handle ErrorObservation events (errors)."""
@@ -239,8 +251,7 @@ class TUIEventManager:
             self.file_manager.update_chat_file(session_id, message_text)
 
     def route_user_input(self, session_id: str, message: str) -> bool:
-        """
-        Route user input to the specified session.
+        """Route user input to the specified session.
         
         Args:
             session_id: ID of the session to send the message to
@@ -274,8 +285,7 @@ class TUIEventManager:
             return False
 
     def send_agent_state_change(self, session_id: str, new_state: AgentState) -> bool:
-        """
-        Send an agent state change action to a session.
+        """Send an agent state change action to a session.
         
         Args:
             session_id: ID of the session
@@ -302,8 +312,7 @@ class TUIEventManager:
             return False
 
     def cleanup_session_events(self, session_id: str) -> None:
-        """
-        Clean up event subscriptions for a session.
+        """Clean up event subscriptions for a session.
         
         Args:
             session_id: ID of the session to clean up
@@ -321,8 +330,7 @@ class TUIEventManager:
         logger.info("Cleaned up all event subscriptions")
 
     def get_subscribed_sessions(self) -> list[str]:
-        """
-        Get list of session IDs that are currently subscribed to events.
+        """Get list of session IDs that are currently subscribed to events.
         
         Returns:
             List of session IDs with active event subscriptions
@@ -330,8 +338,7 @@ class TUIEventManager:
         return list(self.event_subscriptions.keys())
 
     def is_session_subscribed(self, session_id: str) -> bool:
-        """
-        Check if a session is subscribed to events.
+        """Check if a session is subscribed to events.
         
         Args:
             session_id: ID of the session to check
@@ -357,3 +364,91 @@ class TUIEventManager:
     async def broadcast_event(self, event: Event) -> None:
         """Legacy method for backward compatibility."""
         logger.debug(f"Broadcasted event: {type(event).__name__}")
+
+    def _handle_event_error(self, session_id: str, error: Exception) -> None:
+        """Handle errors that occur during event processing.
+        
+        Args:
+            session_id: ID of the session where the error occurred
+            error: The exception that was raised
+        """
+        error_msg = f"Event processing error in session {session_id}: {str(error)}"
+        logger.error(error_msg)
+        
+        # Log the error to the session's log file
+        try:
+            self.file_manager.update_logs_file(session_id, f"❌ {error_msg}\n")
+        except Exception as log_error:
+            logger.error(f"Failed to log error to file: {log_error}")
+        
+        # Update UI to show error state if this is the active session
+        if self.tui_app and session_id == self.session_manager.active_session_id:
+            try:
+                if hasattr(self.tui_app, 'logs_panel'):
+                    self.tui_app.logs_panel.update_display()
+            except Exception as ui_error:
+                logger.error(f"Failed to update UI for error: {ui_error}")
+
+    def reconnect_session_events(self, session_id: str) -> bool:
+        """Attempt to reconnect event subscription for a session.
+        
+        Args:
+            session_id: ID of the session to reconnect
+            
+        Returns:
+            True if reconnection was successful, False otherwise
+        """
+        try:
+            # Unsubscribe first if already subscribed
+            if session_id in self.event_subscriptions:
+                self.unsubscribe_from_session(session_id)
+            
+            # Resubscribe to the session
+            self.subscribe_to_session(session_id)
+            logger.info(f"Successfully reconnected events for session {session_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to reconnect events for session {session_id}: {e}")
+            return False
+
+    def validate_session_connection(self, session_id: str) -> bool:
+        """Validate that a session's event connection is working properly.
+        
+        Args:
+            session_id: ID of the session to validate
+            
+        Returns:
+            True if connection is valid, False otherwise
+        """
+        try:
+            session_context = self.session_manager.get_session(session_id)
+            if not session_context:
+                return False
+            
+            # Check if event stream is available and active
+            if not hasattr(session_context, 'event_stream') or not session_context.event_stream:
+                return False
+            
+            # Check if we're subscribed to this session
+            if session_id not in self.event_subscriptions:
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating session connection {session_id}: {e}")
+            return False
+
+    def get_event_statistics(self) -> dict:
+        """Get statistics about event handling.
+        
+        Returns:
+            Dictionary containing event handling statistics
+        """
+        return {
+            'subscribed_sessions': len(self.event_subscriptions),
+            'streaming_sessions': len(self.streaming_sessions),
+            'active_subscriptions': list(self.event_subscriptions.keys()),
+            'event_handlers': len(self.event_handlers),
+        }

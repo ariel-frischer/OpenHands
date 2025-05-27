@@ -425,3 +425,119 @@ class TestTUIEventManager:
 
 # Import asyncio for async test
 import asyncio
+
+class TestTUIEventManagerEnhanced(TestTUIEventManager):
+    """Additional tests for enhanced TUI Event Manager functionality."""
+
+    def test_handle_event_error(self, event_manager):
+        """Test error handling during event processing."""
+        session_id = "test_session"
+        error = Exception("Test error")
+        
+        event_manager._handle_event_error(session_id, error)
+        
+        # Verify error was logged to file
+        event_manager.file_manager.update_logs_file.assert_called_once_with(
+            session_id, f"❌ Event processing error in session {session_id}: Test error\n"
+        )
+
+    def test_handle_event_error_with_ui_update(self, event_manager_with_app, mock_tui_app):
+        """Test error handling with UI update."""
+        session_id = "test_session"
+        error = Exception("Test error")
+        event_manager_with_app.session_manager.active_session_id = session_id
+        
+        event_manager_with_app._handle_event_error(session_id, error)
+        
+        # Verify UI was updated
+        mock_tui_app.logs_panel.update_display.assert_called_once()
+
+    def test_reconnect_session_events_success(self, event_manager, mock_session_context):
+        """Test successful session event reconnection."""
+        session_id = "test_session"
+        event_manager.session_manager.get_session.return_value = mock_session_context
+        
+        result = event_manager.reconnect_session_events(session_id)
+        
+        assert result is True
+        # Should have subscribed to the session
+        mock_session_context.event_stream.subscribe.assert_called_once()
+
+    def test_reconnect_session_events_failure(self, event_manager):
+        """Test failed session event reconnection."""
+        session_id = "test_session"
+        event_manager.session_manager.get_session.return_value = None
+        
+        result = event_manager.reconnect_session_events(session_id)
+        
+        assert result is False
+
+    def test_validate_session_connection_valid(self, event_manager, mock_session_context):
+        """Test validation of valid session connection."""
+        session_id = "test_session"
+        event_manager.session_manager.get_session.return_value = mock_session_context
+        event_manager.event_subscriptions[session_id] = "callback_id"
+        
+        result = event_manager.validate_session_connection(session_id)
+        
+        assert result is True
+
+    def test_validate_session_connection_invalid_no_session(self, event_manager):
+        """Test validation of invalid session connection - no session."""
+        session_id = "test_session"
+        event_manager.session_manager.get_session.return_value = None
+        
+        result = event_manager.validate_session_connection(session_id)
+        
+        assert result is False
+
+    def test_validate_session_connection_invalid_no_subscription(self, event_manager, mock_session_context):
+        """Test validation of invalid session connection - no subscription."""
+        session_id = "test_session"
+        event_manager.session_manager.get_session.return_value = mock_session_context
+        # No subscription in event_subscriptions
+        
+        result = event_manager.validate_session_connection(session_id)
+        
+        assert result is False
+
+    def test_get_event_statistics(self, event_manager):
+        """Test getting event statistics."""
+        # Add some test data
+        event_manager.event_subscriptions["session1"] = "callback1"
+        event_manager.event_subscriptions["session2"] = "callback2"
+        event_manager.streaming_sessions.add("session1")
+        
+        stats = event_manager.get_event_statistics()
+        
+        assert stats['subscribed_sessions'] == 2
+        assert stats['streaming_sessions'] == 1
+        assert stats['active_subscriptions'] == ["session1", "session2"]
+        assert stats['event_handlers'] == 7  # Number of event types handled
+
+    def test_handle_agent_state_changed_with_session_update(self, event_manager, mock_session_context):
+        """Test agent state change handling with session context update."""
+        session_id = "test_session"
+        new_state = AgentState.RUNNING
+        event = AgentStateChangedObservation(content="State changed", agent_state=new_state.value)
+        event_manager.session_manager.get_session.return_value = mock_session_context
+        
+        event_manager._handle_agent_state_changed(session_id, event)
+        
+        # Verify session context was updated
+        assert mock_session_context.agent_state == new_state
+        event_manager.session_manager.update_session_activity.assert_called_once_with(session_id)
+
+    def test_handle_agent_state_changed_with_ui_update(self, event_manager_with_app, mock_tui_app, mock_session_context):
+        """Test agent state change handling with UI update."""
+        session_id = "test_session"
+        new_state = AgentState.RUNNING
+        event = AgentStateChangedObservation(content="State changed", agent_state=new_state.value)
+        event_manager_with_app.session_manager.get_session.return_value = mock_session_context
+        event_manager_with_app.session_manager.active_session_id = session_id
+        
+        event_manager_with_app._handle_agent_state_changed(session_id, event)
+        
+        # Verify UI panels were updated
+        mock_tui_app.sessions_panel.update_display.assert_called_once()
+        mock_tui_app.chat_panel.update_display.assert_called_once_with(session_id)

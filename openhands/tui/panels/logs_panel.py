@@ -52,6 +52,10 @@ class TUILogHandler(logging.Handler):
             # Add to global logs
             self.global_logs.append(log_entry)
             
+            # Debug: Print to console to verify logs are being captured
+            if record.name.startswith('openhands') and 'session' in record.getMessage().lower():
+                print(f"[TUI LOG CAPTURE] {record.levelname}: {record.getMessage()}", flush=True)
+            
             # Add to session-specific logs if session_id is available
             session_id = log_entry.get('session_id')
             if session_id:
@@ -111,10 +115,38 @@ def get_tui_log_handler() -> TUILogHandler:
     global _tui_log_handler
     if _tui_log_handler is None:
         _tui_log_handler = TUILogHandler()
-        # Add to the root logger to capture all logs
+        
+        # Add to the OpenHands logger specifically
+        from openhands.core.logger import openhands_logger
+        openhands_logger.addHandler(_tui_log_handler)
+        _tui_log_handler.setLevel(logging.DEBUG)
+        
+        # Also add to root logger to capture other logs
         root_logger = logging.getLogger()
         root_logger.addHandler(_tui_log_handler)
-        _tui_log_handler.setLevel(logging.DEBUG)
+        
+        # Set a simple formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s:%(levelname)s - %(message)s')
+        _tui_log_handler.setFormatter(formatter)
+        
+        # Set up file logging to logs/ directory
+        import os
+        from pathlib import Path
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        
+        # Create file handler for TUI logs
+        file_handler = logging.FileHandler(logs_dir / "tui_debug.log")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        
+        # Add file handler to both loggers
+        openhands_logger.addHandler(file_handler)
+        root_logger.addHandler(file_handler)
+        
+        # Test that the handler is working
+        openhands_logger.info("TUI log handler successfully initialized")
+        
     return _tui_log_handler
 
 
@@ -142,6 +174,9 @@ class LogsPanel(BasePanel):
         
         # Get the TUI log handler
         self.log_handler = get_tui_log_handler()
+        
+        # Initialize with current logs
+        self.update_logs_display()
     
     def get_panel_name(self) -> str:
         """Get the panel name for file operations.
@@ -161,18 +196,17 @@ class LogsPanel(BasePanel):
             active_session = self.session_manager.get_active_session()
             if active_session:
                 session_id = active_session.sid
-            else:
-                return
+            # If no active session, show all logs (session_id will be empty)
         
         self.update_logs_display(session_id)
     
-    def update_logs_display(self, session_id: str) -> None:
+    def update_logs_display(self, session_id: str = "") -> None:
         """Update logs for active session with responsive layout.
         
         Args:
-            session_id: Session ID to update logs for
+            session_id: Session ID to update logs for, or empty for all logs
         """
-        logger.debug(f"Updating logs display for session: {session_id}")
+        logger.debug(f"Updating logs display for session: {session_id or 'all'}")
         
         # Clear existing logs
         self.logs_display._widgets.clear()
@@ -184,8 +218,11 @@ class LogsPanel(BasePanel):
         # We use self.max_log_entries (default 20) as a hard cap on entries processed.
         # The display will show what fits from these recent_logs.
         
-        # Get log entries for the session
-        log_entries = self.get_session_logs(session_id)
+        # Get log entries for the session or all logs
+        if session_id:
+            log_entries = self.get_session_logs(session_id)
+        else:
+            log_entries = self.log_handler.get_all_logs()
         
         if not log_entries:
             self.logs_display += ptg.Label("[dim]No logs available[/dim]")
@@ -197,7 +234,7 @@ class LogsPanel(BasePanel):
                 self.logs_display += widget
         
         # Update logs file for Ctrl+E
-        self.file_manager.update_logs_file(session_id, log_entries)
+        self.file_manager.update_logs_file(session_id or "all", log_entries)
     
     def get_session_logs(self, session_id: str) -> list[dict]:
         """Get logs for specific session.
@@ -269,15 +306,14 @@ class LogsPanel(BasePanel):
         # Wrap long log messages to fit terminal width
         # self.width is panel width. Subtract ~2 for internal padding/borders of the label.
         label_content_area_width = max(10, self.width - 2)
-        formatter = ptg.MarkupFormatter()
         
         # Construct prefix for length calculation
         prefix_text_raw = f"{timestamp_str} {level} " # Raw text for length
         prefix_markup = f"[{color}]{timestamp_str} {level}[/{color}] " # Markup for display
         
-        prefix_visual_len = len(formatter.remove_markup(prefix_markup)) # Actually, just len(prefix_text_raw) is fine here
+        prefix_visual_len = len(ptg.strip_markup(prefix_markup)) # Actually, just len(prefix_text_raw) is fine here
                                                                     # as markup doesn't change length of this specific prefix.
-                                                                    # Using formatter for consistency if prefix becomes complex.
+                                                                    # Using strip_markup for consistency if prefix becomes complex.
         
         content_wrap_width = max(10, label_content_area_width - prefix_visual_len)
         wrapped_message = self.wrap_log_message(message, content_wrap_width)

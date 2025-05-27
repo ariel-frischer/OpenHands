@@ -15,6 +15,7 @@ from openhands.storage.settings.file_settings_store import FileSettingsStore
 
 from .managers import SessionManager, TUIEventManager, TUIPanelFileManager
 from .panels import ChatPanel, LogsPanel, SessionsPanel
+from .panels.logs_panel import get_tui_log_handler
 from .utils import KeyBindings
 
 
@@ -56,6 +57,12 @@ class OpenHandsTUIApp:
         # Give session manager access to event manager for new session creation
         self.session_manager.event_manager = self.event_manager
         
+        # Initialize TUI log handler to capture logs for display
+        self.tui_log_handler = get_tui_log_handler()
+        
+        # Ensure the log handler is properly set up and capturing logs
+        logger.info("TUI log handler initialized and ready to capture logs")
+        
         # Initialize panels
         self.sessions_panel = SessionsPanel(self.session_manager, self.file_manager)
         self.chat_panel = ChatPanel(self.session_manager, self.event_manager, self.file_manager)
@@ -83,6 +90,7 @@ class OpenHandsTUIApp:
         terminal_width = ptg.terminal.width
         terminal_height = ptg.terminal.height
         logger.info(f"Terminal dimensions: {terminal_width}x{terminal_height}")
+        logger.debug(f"Setting up layout with terminal size: {terminal_width}x{terminal_height}")
         
         # Create a vertical container for the left column (sessions + logs only)
         left_column = ptg.Container(
@@ -101,19 +109,32 @@ class OpenHandsTUIApp:
             self.chat_panel
         )
         
-        # Create left column window
+        # Create left column window - use full height with explicit positioning
+        left_width = int(terminal_width * 0.3)
+        right_width = int(terminal_width * 0.7)
+        
         left_window = ptg.Window(
             left_column,
             title="",
-            box="DOUBLE"
+            box="DOUBLE",
+            width=left_width,
+            height=terminal_height,
+            pos=(0, 0)  # Explicitly position at top-left
         )
         
-        # Create chat window with header
+        # Create chat window with header - use full height with explicit positioning
         chat_window = ptg.Window(
             chat_column,
             title="",
-            box="DOUBLE"
+            box="DOUBLE",
+            width=right_width,
+            height=terminal_height,
+            pos=(left_width, 0)  # Position to the right of left window
         )
+        
+        logger.debug(f"Created windows - Left: {left_width}x{terminal_height}, Right: {right_width}x{terminal_height}")
+        logger.debug(f"Left window position will be: (0, 0)")
+        logger.debug(f"Right window position will be: ({left_width}, 0)")
         
         # Create window manager first
         self.manager = ptg.WindowManager()
@@ -126,6 +147,7 @@ class OpenHandsTUIApp:
         layout = self.manager.layout
         
         # Add slots: left column (30%) and right column (70%), both using full terminal height
+        # Use height=1.0 to fill the entire terminal height
         layout.add_slot("left", width=0.3, height=1.0)
         layout.add_slot("right", width=0.7, height=1.0)
         
@@ -140,6 +162,13 @@ class OpenHandsTUIApp:
         
         # Apply the layout after window manager is set up
         layout.apply()
+        
+        # Debug: Log actual window positions after layout application
+        logger.debug(f"After layout.apply():")
+        logger.debug(f"  Left window pos: {getattr(left_window, 'pos', 'unknown')}")
+        logger.debug(f"  Chat window pos: {getattr(chat_window, 'pos', 'unknown')}")
+        logger.debug(f"  Left window size: {getattr(left_window, 'width', 'unknown')}x{getattr(left_window, 'height', 'unknown')}")
+        logger.debug(f"  Chat window size: {getattr(chat_window, 'width', 'unknown')}x{getattr(chat_window, 'height', 'unknown')}")
         
         # Setup PyTermGUI keybindings after window manager is created
         self.keybindings.setup_pytermgui_bindings()
@@ -170,11 +199,31 @@ class OpenHandsTUIApp:
             logger.info(f"Terminal resized from {self.last_terminal_size} to {current_size}")
             self.last_terminal_size = current_size
             
-            # With Layout system, responsiveness is automatic
-            # Just need to reapply layout and refresh components
             try:
+                # Recalculate window dimensions and positions
+                terminal_width, terminal_height = current_size
+                left_width = int(terminal_width * 0.3)
+                right_width = int(terminal_width * 0.7)
+                
+                # Update window sizes and positions
+                if hasattr(self, 'left_window') and self.left_window:
+                    self.left_window.width = left_width
+                    self.left_window.height = terminal_height
+                    self.left_window.pos = (0, 0)
+                    
+                if hasattr(self, 'chat_window') and self.chat_window:
+                    self.chat_window.width = right_width
+                    self.chat_window.height = terminal_height
+                    self.chat_window.pos = (left_width, 0)
+                
                 # Reapply the layout to handle new terminal dimensions
                 if hasattr(self, 'layout'):
+                    # Update layout slots with new dimensions
+                    self.layout.clear()
+                    self.layout.add_slot("left", width=0.3, height=1.0)
+                    self.layout.add_slot("right", width=0.7, height=1.0)
+                    self.layout.assign(self.left_window, index=0, apply=False)
+                    self.layout.assign(self.chat_window, index=1, apply=False)
                     self.layout.apply()
                 
                 # Notify all panels of resize so they can update their content
@@ -193,7 +242,10 @@ class OpenHandsTUIApp:
                 if hasattr(self, 'chat_window') and self.chat_window:
                     self.chat_window.refresh()
                     
-                logger.debug("Layout reapplied and panels refreshed for terminal resize")
+                logger.debug(f"Layout updated for new terminal size: {terminal_width}x{terminal_height}")
+                logger.debug(f"Left window: {left_width}x{terminal_height} at (0,0)")
+                logger.debug(f"Right window: {right_width}x{terminal_height} at ({left_width},0)")
+                    
             except Exception as e:
                 logger.error(f"Error handling terminal resize: {e}")
     
@@ -284,17 +336,46 @@ class OpenHandsTUIApp:
                 # Other async tasks (like _resize_monitor and _timeout_monitor) run concurrently.
                 pass  # Manager loop is active within this context
 
+        except Exception as e:
+            logger.error(f"Unhandled exception in TUI main loop: {e}", exc_info=True)
+            # Don't re-raise to allow graceful shutdown
         finally:
             logger.info("TUI application shutting down...")
+            
+            # Cancel all background tasks
             resize_task.cancel()
             if timeout_task:
                 timeout_task.cancel()
+            
+            # Clean up sessions and their background tasks
+            try:
+                if hasattr(self, 'session_manager') and self.session_manager:
+                    await self.session_manager.cleanup_all_sessions()
+            except Exception as e:
+                logger.debug(f"Error during session cleanup: {e}")
+            
+            # Wait for tasks to complete cancellation
             try:
                 await resize_task
                 if timeout_task:
                     await timeout_task
             except asyncio.CancelledError:
                 logger.debug("Monitor tasks cancelled.")
+            
+            # Cancel any remaining tasks in the event loop
+            try:
+                current_task = asyncio.current_task()
+                tasks = [task for task in asyncio.all_tasks() if not task.done() and task != current_task]
+                if tasks:
+                    logger.debug(f"Cancelling {len(tasks)} remaining tasks...")
+                    for task in tasks:
+                        if not task.cancelled():
+                            task.cancel()
+                    # Wait briefly for tasks to cancel, but don't use gather to avoid recursion
+                    await asyncio.sleep(0.1)
+            except Exception as e:
+                logger.debug(f"Error cancelling remaining tasks: {e}")
+            
             # The `with self.manager:` block ensures `manager.stop()` is called.
             logger.info("OpenHands TUI exited.")
 

@@ -96,28 +96,56 @@ class TestOpenHandsTUIApp:
         assert tui_app.main_container is None
 
     def test_setup_ui(self, tui_app):
-        """Test UI setup creates proper layout."""
+        """Test UI setup creates proper layout with explicit positioning."""
         with patch('pytermgui.Container') as mock_container, \
-             patch('pytermgui.Splitter') as mock_splitter, \
              patch('pytermgui.Window') as mock_window, \
              patch('pytermgui.WindowManager') as mock_manager, \
-             patch.object(tui_app, 'setup_resize_handling') as mock_resize:
+             patch('pytermgui.terminal') as mock_terminal, \
+             patch.object(tui_app.keybindings, 'setup_pytermgui_bindings') as mock_keybindings:
+            
+            # Set specific terminal dimensions for testing
+            mock_terminal.width = 120
+            mock_terminal.height = 40
+            
+            # Mock layout
+            mock_layout = MagicMock()
+            mock_manager.return_value.layout = mock_layout
             
             tui_app.setup_ui()
             
-            # Verify containers and splitters were created
+            # Verify containers were created (for left column, header, chat column)
             assert mock_container.called
-            assert mock_splitter.called
             
-            # Verify window was created
-            mock_window.assert_called_once()
+            # Verify windows were created with explicit positioning
+            assert mock_window.call_count >= 2
             
-            # Verify window manager was created and window added
+            # Check that windows were created with proper dimensions and positioning
+            window_calls = mock_window.call_args_list
+            
+            # First window (left) should be positioned at (0, 0) with 30% width
+            left_call = window_calls[0]
+            left_kwargs = left_call[1]
+            assert left_kwargs['width'] == int(120 * 0.3)  # 36
+            assert left_kwargs['height'] == 40
+            assert left_kwargs['pos'] == (0, 0)
+            
+            # Second window (chat) should be positioned at (left_width, 0) with 70% width
+            chat_call = window_calls[1]
+            chat_kwargs = chat_call[1]
+            assert chat_kwargs['width'] == int(120 * 0.7)  # 84
+            assert chat_kwargs['height'] == 40
+            assert chat_kwargs['pos'] == (int(120 * 0.3), 0)  # (36, 0)
+            
+            # Verify window manager was created
             mock_manager.assert_called_once()
-            tui_app.manager.add.assert_called_once()
             
-            # Verify resize handling was setup
-            mock_resize.assert_called_once()
+            # Verify layout slots were configured
+            mock_layout.add_slot.assert_any_call("left", width=0.3, height=1.0)
+            mock_layout.add_slot.assert_any_call("right", width=0.7, height=1.0)
+            mock_layout.apply.assert_called_once()
+            
+            # Verify keybindings were setup
+            mock_keybindings.assert_called_once()
 
     def test_setup_resize_handling(self, tui_app):
         """Test resize handling setup."""
@@ -130,18 +158,21 @@ class TestOpenHandsTUIApp:
         tui_app.setup_resize_handling()
 
     def test_handle_terminal_resize(self, tui_app, mock_panels):
-        """Test terminal resize handling."""
+        """Test terminal resize handling with window repositioning."""
         sessions_panel, chat_panel, logs_panel = mock_panels
         tui_app.sessions_panel = sessions_panel
         tui_app.chat_panel = chat_panel
         tui_app.logs_panel = logs_panel
         
-        # Mock main container
-        tui_app.main_container = MagicMock()
+        # Mock windows and layout
+        tui_app.left_window = MagicMock()
+        tui_app.chat_window = MagicMock()
+        tui_app.layout = MagicMock()
+        tui_app.header = MagicMock()
         
         # Change terminal size
         original_size = tui_app.last_terminal_size
-        new_size = (original_size[0] + 10, original_size[1] + 5)
+        new_size = (100, 50)  # Specific size for testing calculations
         
         with patch('pytermgui.terminal') as mock_terminal:
             mock_terminal.width = new_size[0]
@@ -152,13 +183,35 @@ class TestOpenHandsTUIApp:
             # Verify size was updated
             assert tui_app.last_terminal_size == new_size
             
+            # Verify window dimensions were recalculated
+            expected_left_width = int(100 * 0.3)  # 30
+            expected_right_width = int(100 * 0.7)  # 70
+            
+            # Verify left window was resized and repositioned
+            assert tui_app.left_window.width == expected_left_width
+            assert tui_app.left_window.height == 50
+            assert tui_app.left_window.pos == (0, 0)
+            
+            # Verify chat window was resized and repositioned
+            assert tui_app.chat_window.width == expected_right_width
+            assert tui_app.chat_window.height == 50
+            assert tui_app.chat_window.pos == (expected_left_width, 0)
+            
+            # Verify layout was updated
+            tui_app.layout.clear.assert_called_once()
+            tui_app.layout.add_slot.assert_any_call("left", width=0.3, height=1.0)
+            tui_app.layout.add_slot.assert_any_call("right", width=0.7, height=1.0)
+            tui_app.layout.apply.assert_called_once()
+            
             # Verify all panels were notified
             sessions_panel.handle_terminal_resize.assert_called_once()
             chat_panel.handle_terminal_resize.assert_called_once()
             logs_panel.handle_terminal_resize.assert_called_once()
             
-            # Verify main container was refreshed
-            tui_app.main_container.refresh.assert_called_once()
+            # Verify windows were refreshed
+            tui_app.left_window.refresh.assert_called_once()
+            tui_app.chat_window.refresh.assert_called_once()
+            tui_app.header.refresh.assert_called_once()
 
     def test_handle_terminal_resize_no_change(self, tui_app, mock_panels):
         """Test terminal resize handling when size hasn't changed."""

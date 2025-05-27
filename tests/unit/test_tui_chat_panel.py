@@ -12,6 +12,7 @@ from openhands.tui.panels.chat_panel import ChatPanel
 from openhands.events.action import MessageAction
 from openhands.events.observation import CmdOutputObservation
 from openhands.events.stream import EventSource
+from openhands.core.schema import AgentState
 
 
 class TestChatPanel:
@@ -281,7 +282,9 @@ class TestChatPanel:
         # Set up active session
         mock_session = MagicMock()
         mock_session.sid = "test-session"
+        mock_session.agent_state = AgentState.AWAITING_USER_INPUT  # Ready state
         mock_session_manager.get_active_session.return_value = mock_session
+        mock_event_manager.route_user_input.return_value = True
         
         with patch.object(chat_panel, 'update_chat_display') as mock_update:
             await chat_panel.send_message()
@@ -308,15 +311,135 @@ class TestChatPanel:
 
     @pytest.mark.asyncio
     async def test_send_message_no_active_session(self, chat_panel, mock_session_manager, mock_event_manager):
-        """Test sending message when no active session."""
+        """Test sending message when no active session - should create task for new session automatically."""
         # Insert a test message
         chat_panel.input_field.insert_text("Test message")
         mock_session_manager.get_active_session.return_value = None
         
+        # Mock asyncio.create_task to capture the task creation
+        with patch('asyncio.create_task') as mock_create_task:
+            # Mock create_task to close the coroutine to avoid warnings
+            def mock_create_task_impl(coro):
+                # Close the coroutine to avoid "never awaited" warnings
+                if hasattr(coro, 'close'):
+                    coro.close()
+                return MagicMock()
+            mock_create_task.side_effect = mock_create_task_impl
+        
         await chat_panel.send_message()
         
-        # Should not route message
-        mock_event_manager.route_user_input.assert_not_called()
+            # Should create task for session creation
+            mock_create_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_session_and_send_message(self, chat_panel, mock_session_manager, mock_event_manager):
+        """Test the _create_session_and_send_message helper method."""
+        mock_session_manager.create_session = AsyncMock(return_value="new-session-id")
+        mock_session_manager.start_session = AsyncMock()
+        mock_event_manager.route_user_input.return_value = True
+        
+        # Mock the input field to have a value
+        chat_panel.input_field.insert_text("Test message")
+        
+        with patch.object(chat_panel, 'update_chat_display') as mock_update:
+            await chat_panel._create_session_and_send_message("Test task", "Test message")
+            
+            # Verify session creation
+            mock_session_manager.create_session.assert_called_once_with("Test task")
+            # Verify session start
+            mock_session_manager.start_session.assert_called_once_with("new-session-id")
+            # Verify message routing
+            mock_event_manager.route_user_input.assert_called_once_with("new-session-id", "Test message")
+            # Verify display update
+            mock_update.assert_called_once_with("new-session-id")
+            # Verify input field was cleared
+            assert chat_panel.input_field.value == ""
+
+    @pytest.mark.asyncio
+    async def test_send_message_auto_start_session(self, chat_panel, mock_session_manager, mock_event_manager):
+        """Test sending message shows warning when session is in LOADING state."""
+        # Set up input field with a message
+        chat_panel.input_field.insert_text("Test message")
+        
+        # Set up active session in LOADING state (not yet started)
+        mock_session = MagicMock()
+        mock_session.sid = "test-session"
+        mock_session.agent_state = AgentState.LOADING
+        mock_session_manager.get_active_session.return_value = mock_session
+        mock_session_manager.start_session = AsyncMock()
+        mock_event_manager.route_user_input.return_value = True
+        
+        with patch.object(chat_panel, 'update_chat_display') as mock_update:
+            await chat_panel.send_message()
+            
+            # Verify session was NOT started (session not ready)
+            mock_session_manager.start_session.assert_not_called()
+            
+            # Verify message was NOT routed (session not ready)
+            mock_event_manager.route_user_input.assert_not_called()
+            
+            # Verify display was NOT updated (no message sent)
+            mock_update.assert_not_called()
+            
+            # Verify input field was NOT cleared (message not sent)
+            assert chat_panel.input_field.value == "Test message"
+
+    @pytest.mark.asyncio
+    async def test_send_message_session_already_started(self, chat_panel, mock_session_manager, mock_event_manager):
+        """Test sending message when session is already started (not in LOADING state)."""
+        # Set up input field with a message
+        chat_panel.input_field.insert_text("Test message")
+        
+        # Set up active session in RUNNING state (already started)
+        mock_session = MagicMock()
+        mock_session.sid = "test-session"
+        mock_session.agent_state = AgentState.RUNNING
+        mock_session_manager.get_active_session.return_value = mock_session
+        mock_session_manager.start_session = AsyncMock()
+        mock_event_manager.route_user_input.return_value = True
+        
+        with patch.object(chat_panel, 'update_chat_display') as mock_update:
+            await chat_panel.send_message()
+            
+            # Verify session was NOT started (already running)
+            mock_session_manager.start_session.assert_not_called()
+            
+            # Verify message was routed
+            mock_event_manager.route_user_input.assert_called_once_with("test-session", "Test message")
+            
+            # Verify display was updated
+            mock_update.assert_called_once_with("test-session")
+            
+            # Verify input field was cleared
+            assert chat_panel.input_field.value == ""
+
+    @pytest.mark.asyncio
+    async def test_send_message_session_start_failure(self, chat_panel, mock_session_manager, mock_event_manager):
+        """Test sending message when session is in LOADING state (same as auto_start_session test)."""
+        # Set up input field with a message
+        chat_panel.input_field.insert_text("Test message")
+        
+        # Set up active session in LOADING state
+        mock_session = MagicMock()
+        mock_session.sid = "test-session"
+        mock_session.agent_state = AgentState.LOADING
+        mock_session_manager.get_active_session.return_value = mock_session
+        mock_session_manager.start_session = AsyncMock(side_effect=Exception("Start failed"))
+        
+        with patch.object(chat_panel, 'update_chat_display') as mock_update:
+            await chat_panel.send_message()
+            
+            # Verify session start was NOT attempted (session not ready)
+            mock_session_manager.start_session.assert_not_called()
+            
+            # Verify message was NOT routed (session not ready)
+            mock_event_manager.route_user_input.assert_not_called()
+            
+            # Verify display was NOT updated (no message sent)
+            mock_update.assert_not_called()
+            
+            # Input field should still contain the message (not cleared)
+            assert chat_panel.input_field.value == "Test message"
 
     @pytest.mark.asyncio
     async def test_pause_agent(self, chat_panel, mock_session_manager):
@@ -343,10 +466,19 @@ class TestChatPanel:
     def test_handle_key_event_enter(self, chat_panel):
         """Test handling Enter key event."""
         with patch('asyncio.create_task') as mock_create_task:
-            with patch.object(chat_panel, 'send_message') as mock_send:
+            with patch('asyncio.get_running_loop') as mock_get_loop:
+                mock_loop = MagicMock()
+                mock_get_loop.return_value = mock_loop
+                
                 result = chat_panel.handle_key_event("Enter")
                 assert result is True
                 mock_create_task.assert_called_once()
+                # Verify the task was created with a coroutine
+                args, kwargs = mock_create_task.call_args
+                assert len(args) == 1
+                # The argument should be a coroutine
+                import inspect
+                assert inspect.iscoroutine(args[0])
 
     def test_handle_key_event_escape(self, chat_panel):
         """Test handling Escape key event."""

@@ -104,6 +104,15 @@ def parse_tui_arguments() -> argparse.Namespace:
     return args
 
 
+def _handle_asyncio_exception(loop, context):
+    """Global exception handler for asyncio tasks to prevent TUI crashes."""
+    exception = context.get('exception')
+    if exception:
+        logger.error(f"Unhandled asyncio exception: {exception}", exc_info=exception)
+    else:
+        logger.error(f"Unhandled asyncio error: {context['message']}")
+
+
 async def main() -> None:
     """Main entry point for the TUI application with CLI integration.
     
@@ -113,6 +122,10 @@ async def main() -> None:
     3. Validate security (reusing CLI security check)
     4. Create and run TUI app
     """
+    # Set up global exception handler for asyncio tasks
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_handle_asyncio_exception)
+    
     try:
         # Parse arguments (reuse CLI argument parsing with TUI extensions)
         args = parse_tui_arguments()
