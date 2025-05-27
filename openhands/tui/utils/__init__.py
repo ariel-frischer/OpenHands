@@ -6,6 +6,22 @@ Utility functions and helpers for the TUI system.
 from .file_operations import FileOperations
 from .formatting import Formatter
 from .keybindings import KeyBindings
+from .pytermgui_debug import (
+    PyTermGUIDebugLogger,
+    get_debug_logger,
+    enable_pytermgui_debug,
+    disable_pytermgui_debug,
+    log_widget_position,
+    log_window_manager_state,
+    validate_window_positions,
+)
+from .positioning_fixes import (
+    PositionAnchor,
+    PositioningFixer,
+    fix_tui_positioning,
+    setup_side_by_side_layout,
+    monitor_and_fix_drift,
+)
 from .resource_manager import (
     TUICleanupMixin,
     TUIResourceManager,
@@ -27,6 +43,18 @@ __all__ = [
     "FileOperations",
     "Formatter",
     "KeyBindings",
+    "PyTermGUIDebugLogger",
+    "get_debug_logger",
+    "enable_pytermgui_debug",
+    "disable_pytermgui_debug",
+    "log_widget_position",
+    "log_window_manager_state",
+    "validate_window_positions",
+    "PositionAnchor",
+    "PositioningFixer",
+    "fix_tui_positioning",
+    "setup_side_by_side_layout",
+    "monitor_and_fix_drift",
     "TUICleanupMixin",
     "TUIResourceManager",
     "AsyncTUIResourceManager",

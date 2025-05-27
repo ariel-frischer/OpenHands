@@ -198,17 +198,9 @@ class SessionsPanel(BasePanel):
     async def _create_session_async(self, task: str) -> None:
         """Async helper for session creation."""
         try:
+            # Create session (now includes runtime connection and setup)
             session_id = await self.session_manager.create_session(task)
-            logger.info(f"Created new session: {session_id}")
-
-            # Subscribe to session events for real-time updates
-            if hasattr(self.session_manager, "event_manager"):
-                self.session_manager.event_manager.subscribe_to_session(session_id)
-
-            # Start the session immediately to make it ready for messages
-            logger.info(f"Starting session {session_id}...")
-            await self.session_manager.start_session(session_id)
-            logger.info(f"Session {session_id} is now ready for messages")
+            logger.info(f"Created new session: {session_id} - ready for messages")
 
             # Update display to remove the "Creating..." indicator and show the new session
             self.update_sessions()

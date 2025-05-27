@@ -17,6 +17,13 @@ from .managers import SessionManager, TUIEventManager, TUIPanelFileManager
 from .panels import ChatPanel, LogsPanel, SessionsPanel
 from .panels.logs_panel import get_tui_log_handler
 from .utils import KeyBindings
+from .utils.pytermgui_debug import (
+    get_debug_logger,
+    enable_pytermgui_debug,
+    log_widget_position,
+    log_window_manager_state,
+    validate_window_positions,
+)
 
 
 class OpenHandsTUIApp:
@@ -92,114 +99,94 @@ class OpenHandsTUIApp:
         # Setup keybindings
         self.keybindings = KeyBindings(self)
 
+        # Initialize PyTermGUI debug logging if enabled
+        if self.tui_settings["debug_layout"]:
+            enable_pytermgui_debug()
+            logger.info("PyTermGUI debug layout mode enabled")
+        
+        # Get debug logger instance for positioning validation
+        self.debug_logger = get_debug_logger()
+
     def setup_ui(self) -> None:
-        """Setup PyTermGUI responsive layout using Layout system with WindowManager."""
-        logger.debug("Setting up responsive TUI layout using PyTermGUI Layout system")
+        """Set up the TUI interface with proper PyTermGUI layout management."""
+        logger.info("Setting up TUI interface...")
 
         # Get terminal dimensions for logging
         terminal_width = ptg.terminal.width
         terminal_height = ptg.terminal.height
         logger.info(f"Terminal dimensions: {terminal_width}x{terminal_height}")
-        logger.debug(
-            f"Setting up layout with terminal size: {terminal_width}x{terminal_height}"
+
+        # Create containers with proper height policies for full terminal height
+        left_column = ptg.Container(
+            self.sessions_panel, 
+            self.logs_panel,
         )
-
-        # Create a vertical container for the left column (sessions + logs only)
-        left_column = ptg.Container(self.sessions_panel, self.logs_panel)
-
-        # Create header as a separate container that will span both columns
+        # Configure container for full height expansion
+        left_column.height_policy = ptg.SizePolicy.FILL  # Key: height_policy not size_policy
+        left_column.overflow = ptg.Overflow.SCROLL  # Prevent unwanted resizing
+        
         header = ptg.Container(
             ptg.Label(
-                "[bold]OpenHands TUI v0.39[/bold]",
-                parent_align=ptg.HorizontalAlignment.CENTER,
+                "[bold blue]OpenHands TUI[/bold blue] | "
+                "[dim]Select session: ←→ | Chat: ↵ | Quit: q[/dim]"
             )
         )
+        
+        # Create windows for each section  
+        left_window = ptg.Window(left_column, title="", box="DOUBLE")
+        left_window.height_policy = ptg.SizePolicy.FILL  # Window should also fill height
+        
+        right_window = ptg.Window(self.chat_panel, title="", box="DOUBLE") 
+        right_window.height_policy = ptg.SizePolicy.FILL  # Window should also fill height
+        
+        header_window = ptg.Window(header, title="", box="SINGLE")
 
-        # Create a container for the chat panel with header
-        chat_column = ptg.Container(header, self.chat_panel)
+        # Create layout with proper slot heights to fill terminal
+        self.layout = ptg.Layout()
+        
+        # Header slot - small fixed height
+        self.layout.add_slot("header", width=1.0, height=3)
+        
+        # Main content slots - fill remaining height (height=1.0 means 100% of available)  
+        self.layout.add_row()
+        self.layout.add_slot("left", width=0.4, height=1.0)   # Key: height=1.0 fills terminal
+        self.layout.add_slot("right", width=0.6, height=1.0)  # Key: height=1.0 fills terminal
 
-        # Create left column window - use full height with explicit positioning
-        left_width = int(terminal_width * 0.3)
-        right_width = int(terminal_width * 0.7)
+        # Assign windows to slots
+        self.layout.assign(header_window, slot="header")
+        self.layout.assign(left_window, slot="left") 
+        self.layout.assign(right_window, slot="right")
 
-        left_window = ptg.Window(
-            left_column,
-            title="",
-            box="DOUBLE",
-            width=left_width,
-            height=terminal_height,
-            pos=(0, 0),  # Explicitly position at top-left
-        )
+        # Apply layout to position and size everything
+        self.layout.apply()
 
-        # Create chat window with header - use full height with explicit positioning
-        chat_window = ptg.Window(
-            chat_column,
-            title="",
-            box="DOUBLE",
-            width=right_width,
-            height=terminal_height,
-            pos=(left_width, 0),  # Position to the right of left window
-        )
+        # Store references for resize handling
+        self.left_column = left_column
+        self.left_window = left_window
+        self.right_window = right_window
+        self.header_window = header_window
 
-        logger.debug(
-            f"Created windows - Left: {left_width}x{terminal_height}, Right: {right_width}x{terminal_height}"
-        )
-        logger.debug(f"Left window position will be: (0, 0)")
-        logger.debug(f"Right window position will be: ({left_width}, 0)")
+        logger.info("TUI interface setup complete")
 
-        # Create window manager first
+        # Create window manager and add windows
         self.manager = ptg.WindowManager()
+        self.manager.add(header_window)
+        self.manager.add(left_window) 
+        self.manager.add(right_window)
 
-        # Add only the layout windows (header is now part of left column)
-        self.manager.add(left_window)
-        self.manager.add(chat_window)
+        # Set the layout on the window manager
+        self.manager.layout = self.layout
 
-        # Configure the layout with responsive slots to use full terminal height
-        layout = self.manager.layout
+        # Enhanced PyTermGUI debug logging
+        self.debug_logger.log_layout_application(self.layout, "Initial layout setup")
 
-        # Add slots: left column (30%) and right column (70%), both using full terminal height
-        # Use height=1.0 to fill the entire terminal height
-        layout.add_slot("left", width=0.3, height=1.0)
-        layout.add_slot("right", width=0.7, height=1.0)
-
-        # Assign windows to slots by index (0 = first slot, 1 = second slot)
-        layout.assign(left_window, index=0, apply=False)  # left slot
-        layout.assign(chat_window, index=1, apply=False)  # right slot
-
-        logger.info(f"Layout setup complete:")
-        logger.info(f"  Left column (30%): Sessions + Logs panels")
-        logger.info(f"  Right column (70%): Chat panel")
-        logger.info(f"  Using Layout system for responsive design")
-
-        # Apply the layout after window manager is set up
-        layout.apply()
-
-        # Debug: Log actual window positions after layout application
-        logger.debug(f"After layout.apply():")
-        logger.debug(f"  Left window pos: {getattr(left_window, 'pos', 'unknown')}")
-        logger.debug(f"  Chat window pos: {getattr(chat_window, 'pos', 'unknown')}")
-        logger.debug(
-            f"  Left window size: {getattr(left_window, 'width', 'unknown')}x{getattr(left_window, 'height', 'unknown')}"
-        )
-        logger.debug(
-            f"  Chat window size: {getattr(chat_window, 'width', 'unknown')}x{getattr(chat_window, 'height', 'unknown')}"
-        )
-
-        # Setup PyTermGUI keybindings after window manager is created
+        # Setup PyTermGUI keybindings
         self.keybindings.setup_pytermgui_bindings()
 
         # Setup terminal resize detection
         self.setup_resize_handling()
 
-        logger.debug("Responsive layout setup complete")
-
-        # Store references for resize handling
-        self.left_column = left_column
-        self.header = header
-        self.left_window = left_window
-        self.chat_window = chat_window
-        self.layout = layout
-        self.window = left_window  # Keep for compatibility
+        logger.debug("Layout-based setup complete")
 
     def setup_resize_handling(self) -> None:
         """Setup terminal resize detection and handling."""
@@ -208,40 +195,26 @@ class OpenHandsTUIApp:
         logger.debug("Using resize detection in main loop")
 
     def handle_terminal_resize(self) -> None:
-        """Handle terminal size changes and update layout."""
+        """Handle terminal size changes using proper PyTermGUI layout management."""
         current_size = (ptg.terminal.width, ptg.terminal.height)
         if current_size != self.last_terminal_size:
             logger.info(
                 f"Terminal resized from {self.last_terminal_size} to {current_size}"
             )
+            
+            # Enhanced resize debug logging
+            self.debug_logger.log_terminal_resize(self.last_terminal_size, current_size)
+            
             self.last_terminal_size = current_size
 
             try:
-                # Recalculate window dimensions and positions
-                terminal_width, terminal_height = current_size
-                left_width = int(terminal_width * 0.3)
-                right_width = int(terminal_width * 0.7)
-
-                # Update window sizes and positions
-                if hasattr(self, "left_window") and self.left_window:
-                    self.left_window.width = left_width
-                    self.left_window.height = terminal_height
-                    self.left_window.pos = (0, 0)
-
-                if hasattr(self, "chat_window") and self.chat_window:
-                    self.chat_window.width = right_width
-                    self.chat_window.height = terminal_height
-                    self.chat_window.pos = (left_width, 0)
-
-                # Reapply the layout to handle new terminal dimensions
-                if hasattr(self, "layout"):
-                    # Update layout slots with new dimensions
-                    self.layout.clear()
-                    self.layout.add_slot("left", width=0.3, height=1.0)
-                    self.layout.add_slot("right", width=0.7, height=1.0)
-                    self.layout.assign(self.left_window, index=0, apply=False)
-                    self.layout.assign(self.chat_window, index=1, apply=False)
+                # Simply reapply the layout - PyTermGUI will handle the positioning and sizing
+                if hasattr(self, "layout") and self.layout:
                     self.layout.apply()
+                    
+                    # Enhanced logging after layout application
+                    self.debug_logger.log_layout_application(self.layout, "Resize layout update")
+                    logger.info("Layout reapplied successfully for terminal resize")
 
                 # Notify all panels of resize so they can update their content
                 if hasattr(self.sessions_panel, "handle_terminal_resize"):
@@ -250,22 +223,6 @@ class OpenHandsTUIApp:
                     self.chat_panel.handle_terminal_resize()
                 if hasattr(self.logs_panel, "handle_terminal_resize"):
                     self.logs_panel.handle_terminal_resize()
-
-                # Refresh all windows
-                if hasattr(self, "header") and self.header:
-                    self.header.refresh()
-                if hasattr(self, "left_window") and self.left_window:
-                    self.left_window.refresh()
-                if hasattr(self, "chat_window") and self.chat_window:
-                    self.chat_window.refresh()
-
-                logger.debug(
-                    f"Layout updated for new terminal size: {terminal_width}x{terminal_height}"
-                )
-                logger.debug(f"Left window: {left_width}x{terminal_height} at (0,0)")
-                logger.debug(
-                    f"Right window: {right_width}x{terminal_height} at ({left_width},0)"
-                )
 
             except Exception as e:
                 logger.error(f"Error handling terminal resize: {e}")
@@ -333,13 +290,11 @@ class OpenHandsTUIApp:
             logger.error("Failed to initialize window manager")
             raise RuntimeError("Window manager not initialized")
 
-        # Skip automatic session creation to avoid blocking TUI startup
+        # Create auto-session in background (non-blocking)
         if not self.tui_settings["debug_layout"]:
-            logger.info(
-                "Normal mode: Session creation will be handled by user interaction"
-            )
-            # Note: Sessions will be created when user clicks "New Session" button
-            # This avoids blocking the TUI startup with Docker container initialization
+            logger.info("Normal mode: Creating auto-session in background")
+            # Create auto-session task (non-blocking)
+            auto_session_task = asyncio.create_task(self._create_auto_session())
         else:
             logger.info(
                 "Debug layout mode: Skipping session creation and runtime startup"
@@ -437,3 +392,35 @@ class OpenHandsTUIApp:
             logger.debug("Timeout monitor cancelled")
         except Exception as e:
             logger.error(f"Error in timeout monitor: {e}")
+
+    async def _create_auto_session(self) -> None:
+        """Create session automatically in background with timeout handling."""
+        try:
+            logger.info("Creating auto-session in background...")
+            
+            # Wait a moment for UI to be fully ready
+            await asyncio.sleep(0.5)
+            
+            # Create session using the fixed session manager with timeout
+            try:
+                session_id = await asyncio.wait_for(
+                    self.session_manager.create_session("Auto-created session"),
+                    timeout=60.0  # 60 second timeout for auto-session creation
+                )
+                logger.info(f"Auto-session {session_id} created successfully")
+                
+                # Update UI to show session is ready
+                if hasattr(self, 'chat_panel') and self.chat_panel:
+                    # Update chat panel to show the new session
+                    self.chat_panel.update_display(session_id)
+                    
+            except asyncio.TimeoutError:
+                logger.error("Auto-session creation timed out after 60 seconds")
+                if hasattr(self, 'chat_panel') and self.chat_panel:
+                    self.chat_panel._show_feedback("Auto-session creation timed out. You can create a session manually.", "error")
+                
+        except Exception as e:
+            logger.error(f"Failed to create auto-session: {e}")
+            # Show error in UI but don't crash TUI
+            if hasattr(self, 'chat_panel') and self.chat_panel:
+                self.chat_panel._show_feedback(f"Auto-session creation failed: {str(e)}", "error")

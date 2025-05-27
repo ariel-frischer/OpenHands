@@ -26,6 +26,7 @@ from openhands.core.setup import (
 )
 from openhands.events import EventStream
 from openhands.memory.memory import Memory
+from openhands.mcp import add_mcp_tools_to_agent
 from openhands.microagent.microagent import BaseMicroagent
 from openhands.runtime.base import Runtime
 from openhands.storage.settings.file_settings_store import FileSettingsStore
@@ -192,6 +193,7 @@ class SessionManager:
         self.sessions: Dict[str, SessionContext] = {}
         self.active_session_id: Optional[str] = None
         self._cleanup_tasks: Dict[str, asyncio.Task] = {}
+        self._session_creation_lock = asyncio.Lock()  # Prevent concurrent session creation
 
         # Network connectivity tracking
         self._connectivity_status = NetworkConnectivityChecker.get_connectivity_status()
@@ -283,7 +285,7 @@ class SessionManager:
             )
 
     async def create_session(self, task: str = "", name: str = "") -> str:
-        """Create a new OpenHands session with enhanced error handling and offline mode support.
+        """Create a new OpenHands session using CLI-proven pattern.
 
         Args:
             task: Initial task description for the session
@@ -295,140 +297,143 @@ class SessionManager:
         Raises:
             Exception: If session creation fails
         """
-        start_time = time.time()
+        # Prevent concurrent session creation attempts
+        async with self._session_creation_lock:
+            start_time = time.time()
 
-        try:
-            # Generate session ID
-            sid = generate_sid(self.config, name if name else None)
+            try:
+                # 1. Generate session ID (same as CLI)
+                sid = generate_sid(self.config, name if name else None)
+                logger.info(f"Creating new session: {sid}")
 
-            logger.info(f"Creating new session: {sid}")
-            logger.debug(f"Session creation started for task: {task}")
+                # 2. Create agent (same as CLI)
+                logger.debug(f"Creating agent for session {sid}")
+                agent = create_agent(self.config)
 
-            # Log connectivity status
-            connectivity = NetworkConnectivityChecker.get_connectivity_status()
-            logger.info(f"Connectivity status: {connectivity}")
+                # 3. Create runtime (same as CLI)
+                logger.debug(f"Creating runtime for session {sid}")
+                runtime = self._get_runtime_for_session(sid, agent)
 
-            # Create agent (lightweight operation)
-            logger.debug(f"Creating agent for session {sid}")
-            agent = create_agent(self.config)
-
-            # Create runtime with offline mode support
-            logger.debug(f"Creating runtime for session {sid}")
-            runtime = self._get_runtime_for_session(sid, agent)
-
-            # Track if we're in offline mode
-            is_offline_mode = (
-                isinstance(runtime.__class__.__name__, str)
-                and "Local" in runtime.__class__.__name__
-            )
-
-            # Create controller without connecting runtime
-            logger.debug(f"Creating controller for session {sid}")
-            controller, initial_state = create_controller(agent, runtime, self.config)
-
-            # Get event stream (lightweight)
-            logger.debug(f"Getting event stream for session {sid}")
-            event_stream = runtime.event_stream
-
-            # Initialize repository if needed (lightweight - just path setup)
-            repo_directory = None
-            if self.config.sandbox.selected_repo:
-                # Don't actually initialize the repo yet, just store the path
-                repo_directory = self.config.sandbox.selected_repo.split("/")[-1]
-
-            # Create memory without runtime connection (lightweight)
-            # Note: Memory creation doesn't require runtime connection for basic setup
-            memory = create_memory(
-                runtime=runtime,
-                event_stream=event_stream,
-                sid=sid,
-                selected_repository=self.config.sandbox.selected_repo,
-                repo_directory=repo_directory,
-                conversation_instructions=None,
-            )
-
-            # Create session context
-            now = datetime.now()
-            session_context = SessionContext(
-                sid=sid,
-                config=self.config,
-                runtime=runtime,
-                controller=controller,
-                event_stream=event_stream,
-                memory=memory,
-                agent_state=AgentState.LOADING,
-                created_at=now,
-                last_activity=now,
-                task_description=task,
-                agent=agent,
-                repo_directory=repo_directory,
-                reload_microagents=False,
-                is_offline_mode=is_offline_mode,
-                startup_time=time.time() - start_time,
-            )
-
-            # Store session
-            self.sessions[sid] = session_context
-
-            # Set as active if it's the first session
-            if self.active_session_id is None:
-                self.active_session_id = sid
-
-            mode_info = "offline mode" if is_offline_mode else "online mode"
-            logger.info(
-                f"Session {sid} created successfully in {mode_info} (deferred initialization)"
-            )
-
-            # Automatically start the session if event manager is available
-            if hasattr(self, "event_manager") and self.event_manager:
-                logger.info(
-                    f"Automatically starting session {sid} and setting up event subscription"
+                # Track if we're in offline mode
+                is_offline_mode = (
+                    isinstance(runtime.__class__.__name__, str)
+                    and "Local" in runtime.__class__.__name__
                 )
+
+                # 4. Create controller (same as CLI)
+                logger.debug(f"Creating controller for session {sid}")
+                controller, initial_state = create_controller(agent, runtime, self.config)
+
+                # 5. Get event stream (same as CLI)
+                logger.debug(f"Getting event stream for session {sid}")
+                event_stream = runtime.event_stream
+
+                # 6. Get event stream (will subscribe after session is stored)
+
+                # 7. Connect runtime with timeout (MISSING IN CURRENT TUI - CRITICAL FIX)
+                logger.info(f"Connecting runtime for session {sid}")
                 try:
-                    # Subscribe to events first
+                    # Add timeout to prevent hanging
+                    await asyncio.wait_for(runtime.connect(), timeout=30.0)
+                    logger.info(f"Runtime connected successfully for session {sid}")
+                except asyncio.TimeoutError:
+                    logger.error(f"Runtime connection timeout for session {sid}")
+                    raise RuntimeError(f"Runtime connection timeout after 30 seconds for session {sid}")
+                except Exception as e:
+                    logger.error(f"Runtime connection failed for session {sid}: {e}")
+                    raise RuntimeError(f"Runtime connection failed for session {sid}: {e}")
+
+                # 8. Initialize repository if needed (CLI pattern)
+                repo_directory = None
+                if self.config.sandbox.selected_repo:
+                    logger.debug(f"Initializing repository for session {sid}")
+                    repo_directory = initialize_repository_for_runtime(
+                        runtime, selected_repository=self.config.sandbox.selected_repo
+                    )
+
+                # 9. Create memory AFTER runtime connection (CLI pattern)
+                logger.debug(f"Creating memory for session {sid}")
+                memory = create_memory(
+                    runtime=runtime,
+                    event_stream=event_stream,
+                    sid=sid,
+                    selected_repository=self.config.sandbox.selected_repo,
+                    repo_directory=repo_directory,
+                    conversation_instructions=None,
+                )
+
+                # 10. Add MCP tools if enabled (CLI pattern)
+                if agent.config.enable_mcp:
+                    logger.debug(f"Adding MCP tools for session {sid}")
+                    await add_mcp_tools_to_agent(agent, runtime, memory, self.config)
+
+                # 11. Create session context with AWAITING_USER_INPUT state (not LOADING)
+                now = datetime.now()
+                session_context = SessionContext(
+                    sid=sid,
+                    config=self.config,
+                    runtime=runtime,
+                    controller=controller,
+                    event_stream=event_stream,
+                    memory=memory,
+                    agent_state=AgentState.AWAITING_USER_INPUT,  # Ready state, not LOADING
+                    created_at=now,
+                    last_activity=now,
+                    task_description=task,
+                    agent=agent,
+                    repo_directory=repo_directory,
+                    reload_microagents=False,
+                    is_offline_mode=is_offline_mode,
+                    is_connected=True,  # Connected after runtime.connect()
+                    startup_time=time.time() - start_time,
+                )
+
+                # 12. Store session
+                self.sessions[sid] = session_context
+
+                # 13. Subscribe to events AFTER session is stored
+                if hasattr(self, "event_manager") and self.event_manager:
+                    logger.debug(f"Subscribing to events for session {sid}")
                     self.event_manager.subscribe_to_session(sid)
 
-                    # Start the session
-                    await self.start_session(sid)
-                    logger.info(
-                        f"Session {sid} automatically started and subscribed to events"
+                # 14. Set as active if first session
+                if self.active_session_id is None:
+                    self.active_session_id = sid
+
+                mode_info = "offline mode" if is_offline_mode else "online mode"
+                logger.info(f"Session {sid} created successfully and ready for input in {mode_info}")
+
+                return sid
+
+            except Exception as e:
+                logger.error(f"Failed to create session: {e}", exc_info=True)
+
+                # Provide enhanced error messaging based on error type
+                error_msg = str(e).lower()
+                if (
+                    "docker" in error_msg
+                    and not NetworkConnectivityChecker.check_docker_availability()
+                ):
+                    enhanced_msg = (
+                        "Docker is not available. Consider installing Docker or "
+                        "setting tui_offline_mode=True in config to use LocalRuntime."
                     )
-                except Exception as e:
-                    logger.error(f"Failed to automatically start session {sid}: {e}")
-                    # Don't fail session creation if auto-start fails
-                    session_context.agent_state = AgentState.ERROR
+                    logger.error(enhanced_msg)
+                elif "network" in error_msg or "connection" in error_msg:
+                    enhanced_msg = (
+                        "Network connectivity issues detected. "
+                        "Check your internet connection or enable offline mode."
+                    )
+                    logger.error(enhanced_msg)
+                elif "[errno -8]" in error_msg or "ai_socktype" in error_msg:
+                    enhanced_msg = (
+                        "DNS/socket resolution error detected. "
+                        "This typically indicates network service configuration issues. "
+                        "Try enabling offline mode or check your network configuration."
+                    )
+                    logger.error(enhanced_msg)
 
-            return sid
-
-        except Exception as e:
-            logger.error(f"Failed to create session: {e}", exc_info=True)
-
-            # Provide enhanced error messaging based on error type
-            error_msg = str(e).lower()
-            if (
-                "docker" in error_msg
-                and not NetworkConnectivityChecker.check_docker_availability()
-            ):
-                enhanced_msg = (
-                    "Docker is not available. Consider installing Docker or "
-                    "setting tui_offline_mode=True in config to use LocalRuntime."
-                )
-                logger.error(enhanced_msg)
-            elif "network" in error_msg or "connection" in error_msg:
-                enhanced_msg = (
-                    "Network connectivity issues detected. "
-                    "Check your internet connection or enable offline mode."
-                )
-                logger.error(enhanced_msg)
-            elif "[errno -8]" in error_msg or "ai_socktype" in error_msg:
-                enhanced_msg = (
-                    "DNS/socket resolution error detected. "
-                    "This typically indicates network service configuration issues. "
-                    "Try enabling offline mode or check your network configuration."
-                )
-                logger.error(enhanced_msg)
-
-            raise
+                raise
 
     async def start_session(self, session_id: str) -> None:
         """Start a session by initializing the agent controller with enhanced error handling.
@@ -572,14 +577,21 @@ class SessionManager:
             # This will run until the agent reaches a terminal state
             from openhands.core.loop import run_agent_until_done
 
-            # Create a background task to run the agent
-            asyncio.create_task(
-                run_agent_until_done(
+            # Create a background task to run the agent with proper exception handling
+            agent_task = asyncio.create_task(
+                self._run_agent_until_done_safe(
+                    session_id,
                     session.controller,
                     session.runtime,
                     session.memory,
                     [AgentState.STOPPED, AgentState.ERROR],
                 )
+            )
+
+            # Track the task for cleanup and add exception handler
+            self._cleanup_tasks[session_id] = agent_task
+            agent_task.add_done_callback(
+                lambda task: self._handle_agent_task_completion(session_id, task)
             )
 
             mode_info = "offline mode" if session.is_offline_mode else "online mode"
@@ -667,6 +679,27 @@ class SessionManager:
         try:
             logger.info(f"Closing session: {session_id}")
 
+            # Cancel any agent background tasks first
+            if session_id in self._cleanup_tasks:
+                agent_task = self._cleanup_tasks[session_id]
+                if not agent_task.done():
+                    logger.info(
+                        f"Cancelling agent background task for session {session_id}"
+                    )
+                    agent_task.cancel()
+                    try:
+                        # Wait briefly for task to cancel
+                        await asyncio.wait_for(agent_task, timeout=2.0)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        # Expected when cancelling
+                        pass
+                    except Exception as e:
+                        logger.debug(
+                            f"Exception during task cancellation for session {session_id}: {e}"
+                        )
+
+                del self._cleanup_tasks[session_id]
+
             # Save session state
             end_state = session.controller.get_state()
             end_state.save_to_session(
@@ -680,11 +713,6 @@ class SessionManager:
                 session.agent.reset()
             session.runtime.close()
             await session.controller.close()
-
-            # Cancel any cleanup tasks
-            if session_id in self._cleanup_tasks:
-                self._cleanup_tasks[session_id].cancel()
-                del self._cleanup_tasks[session_id]
 
             # Remove from sessions
             del self.sessions[session_id]
@@ -707,6 +735,9 @@ class SessionManager:
             # Still remove from sessions even if cleanup failed
             if session_id in self.sessions:
                 del self.sessions[session_id]
+            if session_id in self._cleanup_tasks:
+                self._cleanup_tasks[session_id].cancel()
+                del self._cleanup_tasks[session_id]
             if self.active_session_id == session_id:
                 self.active_session_id = None
             raise
@@ -768,17 +799,38 @@ class SessionManager:
 
     async def cleanup_all_sessions(self) -> None:
         """Clean up all sessions."""
+        # First cancel all background agent tasks
+        if self._cleanup_tasks:
+            logger.info(f"Cancelling {len(self._cleanup_tasks)} background agent tasks")
+            for session_id, task in self._cleanup_tasks.items():
+                if not task.done():
+                    task.cancel()
+
+            # Wait briefly for tasks to cancel
+            if self._cleanup_tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(
+                            *self._cleanup_tasks.values(), return_exceptions=True
+                        ),
+                        timeout=3.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Some background tasks did not cancel within timeout"
+                    )
+                except Exception as e:
+                    logger.debug(f"Exception during background task cleanup: {e}")
+
+            self._cleanup_tasks.clear()
+
+        # Then close all sessions
         session_ids = list(self.sessions.keys())
         for session_id in session_ids:
             try:
                 await self.close_session(session_id)
             except Exception as e:
                 logger.error(f"Error cleaning up session {session_id}: {e}")
-
-        # Cancel all cleanup tasks
-        for task in self._cleanup_tasks.values():
-            task.cancel()
-        self._cleanup_tasks.clear()
 
     def get_session_count(self) -> int:
         """Get the number of active sessions.
@@ -954,6 +1006,114 @@ class SessionManager:
                 session.startup_time = (
                     datetime.now() - session.created_at
                 ).total_seconds()
+            self.update_session_activity(session_id)
+
+    async def _run_agent_until_done_safe(
+        self,
+        session_id: str,
+        controller: AgentController,
+        runtime: Runtime,
+        memory: Memory,
+        end_states: list[AgentState],
+    ) -> None:
+        """Safely run agent until done with proper exception handling.
+
+        This method wraps run_agent_until_done to prevent background task
+        exceptions from crashing the TUI event loop.
+
+        Args:
+            session_id: Session ID for logging and error tracking
+            controller: Agent controller
+            runtime: Runtime instance
+            memory: Memory instance
+            end_states: States that indicate the agent should stop
+        """
+        try:
+            logger.info(f"Starting agent loop for session {session_id}")
+
+            from openhands.core.loop import run_agent_until_done
+
+            await run_agent_until_done(controller, runtime, memory, end_states)
+
+            logger.info(f"Agent loop completed normally for session {session_id}")
+
+        except asyncio.CancelledError:
+            logger.info(f"Agent loop cancelled for session {session_id}")
+            # Don't re-raise CancelledError as it's expected during cleanup
+
+        except Exception as e:
+            logger.error(
+                f"Agent loop failed for session {session_id}: {e}", exc_info=True
+            )
+
+            # Update session to error state but don't crash the TUI
+            session = self.get_session(session_id)
+            if session:
+                session.agent_state = AgentState.ERROR
+                self.record_session_error(session_id, f"Agent loop failed: {e}")
+
+            # Provide user-friendly error messages
+            error_msg = str(e).lower()
+            if "docker" in error_msg:
+                user_friendly_msg = (
+                    "Docker container error during agent execution. "
+                    "Check Docker status or try offline mode."
+                )
+            elif "network" in error_msg or "connection" in error_msg:
+                user_friendly_msg = (
+                    "Network error during agent execution. "
+                    "Check internet connection or try offline mode."
+                )
+            elif "timeout" in error_msg:
+                user_friendly_msg = (
+                    "Agent execution timed out. This may be due to resource constraints "
+                    "or long-running operations."
+                )
+            else:
+                user_friendly_msg = f"Agent execution error: {e}"
+
+            logger.error(f"Session {session_id}: {user_friendly_msg}")
+
+            # Note: We don't re-raise the exception to prevent TUI crashes
+
+    def _handle_agent_task_completion(
+        self, session_id: str, task: asyncio.Task
+    ) -> None:
+        """Handle completion of agent background task.
+
+        Args:
+            session_id: Session ID
+            task: The completed asyncio task
+        """
+        try:
+            # Remove from cleanup tasks tracking
+            if session_id in self._cleanup_tasks:
+                del self._cleanup_tasks[session_id]
+
+            # Check if task completed successfully or with error
+            if task.cancelled():
+                logger.debug(f"Agent task cancelled for session {session_id}")
+            elif task.done():
+                # Task completed - check for exceptions
+                try:
+                    task.result()  # This will raise if there was an exception
+                    logger.debug(
+                        f"Agent task completed successfully for session {session_id}"
+                    )
+                except Exception as e:
+                    # Exception was already handled in _run_agent_until_done_safe
+                    logger.debug(
+                        f"Agent task completed with handled exception for session {session_id}: {e}"
+                    )
+
+        except Exception as e:
+            # Ensure task completion handler never crashes
+            logger.error(
+                f"Error in agent task completion handler for session {session_id}: {e}"
+            )
+
+        finally:
+            # Update session activity to reflect task completion
             self.update_session_activity(session_id)
 
     def get_session_health(self, session_id: str) -> Dict[str, Union[str, bool, int]]:

@@ -113,8 +113,8 @@ class ChatPanel(BasePanel):
 
         # Input area with Enter key binding
         self.input_field = ptg.InputField(prompt="Message: ")
-        # Bind Enter key to send message
-        self.input_field.bind(ptg.keys.ENTER, self.send_message)
+        # Bind Enter key to send message (use sync wrapper for PTG compatibility)
+        self.input_field.bind(ptg.keys.ENTER, self.send_message_sync)
 
         self.send_button = ptg.Button("Send", self.send_message_sync)
         self.pause_button = ptg.Button("Pause", self.pause_agent)
@@ -565,20 +565,10 @@ class ChatPanel(BasePanel):
         try:
             logger.info(f"Creating new session with task: {task_description}")
 
-            # Create the session
+            # Create the session (now includes runtime connection and setup)
             session_id = await self.session_manager.create_session(task_description)
-            logger.info(f"Created session {session_id}, subscribing to events")
-            self._show_feedback("Session created, starting...", "info")
-
-            # Subscribe to session events
-            if hasattr(self.session_manager, "event_manager"):
-                self.session_manager.event_manager.subscribe_to_session(session_id)
-
-            # Start the session
-            logger.info(f"Starting session {session_id}")
-            await self.session_manager.start_session(session_id)
-            logger.info(f"Session {session_id} started, now sending message")
-            self._show_feedback("Session started, sending message...", "sending")
+            logger.info(f"Created session {session_id} and it's ready for messages")
+            self._show_feedback("Session created and ready, sending message...", "sending")
 
             # Now send the message
             success = self.event_manager.route_user_input(session_id, message)
