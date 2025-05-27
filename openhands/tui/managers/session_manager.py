@@ -111,6 +111,9 @@ class SessionManager:
                     selected_repository=self.config.sandbox.selected_repo,
                 )
             
+            # Connect to runtime
+            await runtime.connect()
+            
             # Create memory (this will load microagents from the selected repository)
             memory = create_memory(
                 runtime=runtime,
@@ -151,6 +154,55 @@ class SessionManager:
             
         except Exception as e:
             logger.error(f"Failed to create session: {e}")
+            raise
+    
+    async def start_session(self, session_id: str) -> None:
+        """Start a session by initializing the agent controller.
+        
+        Args:
+            session_id: ID of the session to start
+            
+        Raises:
+            ValueError: If session ID is not found
+            Exception: If session startup fails
+        """
+        if session_id not in self.sessions:
+            raise ValueError(f"Session {session_id} not found")
+        
+        session = self.sessions[session_id]
+        
+        try:
+            logger.info(f"Starting session: {session_id}")
+            
+            # Update agent state to INIT
+            session.agent_state = AgentState.INIT
+            
+            # Set agent state to AWAITING_USER_INPUT to indicate it's ready for interaction
+            await session.controller.set_agent_state_to(AgentState.AWAITING_USER_INPUT)
+            
+            # Start the agent loop in the background using run_agent_until_done
+            # This will run until the agent reaches a terminal state
+            from openhands.core.loop import run_agent_until_done
+            
+            # Create a background task to run the agent
+            asyncio.create_task(
+                run_agent_until_done(
+                    session.controller,
+                    session.runtime,
+                    session.memory,
+                    [AgentState.STOPPED, AgentState.ERROR]
+                )
+            )
+            
+            # Update agent state to AWAITING_USER_INPUT
+            session.agent_state = AgentState.AWAITING_USER_INPUT
+            
+            logger.info(f"Session {session_id} started successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to start session {session_id}: {e}")
+            # Update state to indicate error
+            session.agent_state = AgentState.ERROR
             raise
     
     async def switch_session(self, session_id: str) -> None:

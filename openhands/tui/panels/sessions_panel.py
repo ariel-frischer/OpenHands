@@ -117,6 +117,13 @@ class SessionsPanel(BasePanel):
             session_id = await self.session_manager.create_session(task)
             logger.info(f"Created new session: {session_id}")
             
+            # Subscribe to session events for real-time updates
+            if hasattr(self.session_manager, 'event_manager'):
+                self.session_manager.event_manager.subscribe_to_session(session_id)
+            
+            # Start the session (this begins the agent controller loop)
+            await self.session_manager.start_session(session_id)
+            
             # Update display
             self.update_sessions()
             

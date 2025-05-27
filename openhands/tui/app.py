@@ -53,6 +53,9 @@ class OpenHandsTUIApp:
         self.file_manager = TUIPanelFileManager()
         self.event_manager = TUIEventManager(self.session_manager, self.file_manager, self.config, self)
         
+        # Give session manager access to event manager for new session creation
+        self.session_manager.event_manager = self.event_manager
+        
         # Initialize panels
         self.sessions_panel = SessionsPanel(self.session_manager, self.file_manager)
         self.chat_panel = ChatPanel(self.session_manager, self.event_manager, self.file_manager)
@@ -257,14 +260,11 @@ class OpenHandsTUIApp:
             logger.error("Failed to initialize window manager")
             raise RuntimeError("Window manager not initialized")
 
-        # Skip session creation in debug layout mode for faster startup
+        # Skip automatic session creation to avoid blocking TUI startup
         if not self.tui_settings['debug_layout']:
-            await self.session_manager.create_session("Welcome to OpenHands TUI!")
-            # Ensure panels are updated with initial data before the manager starts drawing.
-            self.sessions_panel.update_sessions()
-            if self.session_manager.active_session_id:
-                self.chat_panel.update_display(self.session_manager.active_session_id)
-                self.logs_panel.update_display(self.session_manager.active_session_id)
+            logger.info("Normal mode: Session creation will be handled by user interaction")
+            # Note: Sessions will be created when user clicks "New Session" button
+            # This avoids blocking the TUI startup with Docker container initialization
         else:
             logger.info("Debug layout mode: Skipping session creation and runtime startup")
 
