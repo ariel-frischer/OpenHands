@@ -57,6 +57,7 @@ class SessionContext:
     # Network/offline mode tracking
     is_offline_mode: bool = False
     connection_attempts: int = 0
+    microagents_loaded: bool = False
 
 
 class NetworkConnectivityChecker:
@@ -85,6 +86,39 @@ class NetworkConnectivityChecker:
             finally:
                 sock.close()
         except (socket.error, socket.timeout, OSError):
+            return False
+
+    @staticmethod
+    def check_http_connectivity(timeout: float = 5) -> bool:
+        """Check if HTTP requests work properly (detects DNS/hostname resolution issues).
+
+        Args:
+            timeout: Timeout in seconds
+
+        Returns:
+            True if HTTP requests work, False if DNS/hostname issues detected
+        """
+        try:
+            import httpx
+
+            # Test a simple HTTP request to a reliable service
+            with httpx.Client(timeout=timeout) as client:
+                response = client.get("http://httpbin.org/status/200")
+                return response.status_code == 200
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Specifically detect the "[Errno -8]" and related DNS issues
+            if (
+                "[errno -8]" in error_msg
+                or "servname not supported" in error_msg
+                or "ai_socktype" in error_msg
+                or "name resolution" in error_msg
+                or "dns" in error_msg
+            ):
+                logger.warning(f"DNS/hostname resolution issue detected: {e}")
+                return False
+            # Other network errors
+            logger.debug(f"HTTP connectivity check failed: {e}")
             return False
 
     @staticmethod
@@ -131,6 +165,7 @@ class NetworkConnectivityChecker:
         """
         return {
             "internet": cls.check_internet_connectivity(),
+            "http": cls.check_http_connectivity(),
             "docker": cls.check_docker_availability(),
             "local_runtime": cls.check_local_runtime_dependencies(),
         }
@@ -139,12 +174,18 @@ class NetworkConnectivityChecker:
 class SessionManager:
     """Manages multiple concurrent OpenHands sessions."""
 
-    def __init__(self, config: AppConfig, settings_store: Optional[FileSettingsStore]):
+    def __init__(
+        self,
+        config: AppConfig,
+        settings_store: Optional[FileSettingsStore],
+        offline_mode: bool = False,
+    ):
         """Initialize the session manager.
 
         Args:
             config: Application configuration
             settings_store: Settings store for session persistence
+            offline_mode: Whether to enable offline mode (use LocalRuntime)
         """
         self.config = config
         self.settings_store = settings_store
@@ -154,7 +195,7 @@ class SessionManager:
 
         # Network connectivity tracking
         self._connectivity_status = NetworkConnectivityChecker.get_connectivity_status()
-        self._offline_mode_enabled = False
+        self._offline_mode_enabled = offline_mode
         self._last_connectivity_check = 0.0
         self._connectivity_check_interval = 30.0  # Check every 30 seconds
 
@@ -164,8 +205,8 @@ class SessionManager:
         Returns:
             True if offline mode should be used, False otherwise
         """
-        # Force offline mode if explicitly enabled in config
-        if hasattr(self.config, "tui_offline_mode") and self.config.tui_offline_mode:
+        # Force offline mode if explicitly enabled
+        if self._offline_mode_enabled:
             return True
 
         # Check connectivity status (with caching to avoid frequent checks)
@@ -178,6 +219,16 @@ class SessionManager:
                 NetworkConnectivityChecker.get_connectivity_status()
             )
             self._last_connectivity_check = current_time
+
+        # Use offline mode if HTTP requests fail (DNS/hostname resolution issues)
+        if (
+            not self._connectivity_status.get("http", True)
+            and self._connectivity_status["local_runtime"]
+        ):
+            logger.info(
+                "HTTP connectivity issues detected (likely DNS/hostname resolution), using offline mode with LocalRuntime"
+            )
+            return True
 
         # Use offline mode if Docker isn't available but LocalRuntime is
         if (
@@ -503,6 +554,20 @@ class SessionManager:
                 "MAIN", state_change_callback, f"session_manager_state_{session_id}"
             )
 
+            # Try to load microagents now that runtime is connected
+            # This handles cases where microagents failed to load during session creation
+            if not session.microagents_loaded:
+                logger.info(f"Attempting to load microagents for session {session_id}")
+                microagents_success = self.load_session_microagents(session_id)
+                if microagents_success:
+                    logger.info(
+                        f"Successfully loaded microagents for session {session_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Microagents loading failed for session {session_id}, continuing without them"
+                    )
+
             # Start the agent loop in the background using run_agent_until_done
             # This will run until the agent reaches a terminal state
             from openhands.core.loop import run_agent_until_done
@@ -731,6 +796,39 @@ class SessionManager:
         """
         return len(self.sessions) > 0
 
+    def load_session_microagents(self, session_id: Optional[str] = None) -> bool:
+        """Load microagents for a session when runtime is connected.
+
+        Args:
+            session_id: ID of the session to load microagents for (defaults to active session)
+
+        Returns:
+            True if microagents were loaded successfully, False otherwise
+        """
+        target_id = session_id or self.active_session_id
+        if target_id and target_id in self.sessions:
+            session = self.sessions[target_id]
+            try:
+                # Get microagents from the selected repository
+                selected_repo = getattr(session.config.sandbox, "selected_repo", None)
+                microagents: List[BaseMicroagent] = (
+                    session.runtime.get_microagents_from_selected_repo(selected_repo)
+                )
+                # Load microagents into memory
+                session.memory.load_user_workspace_microagents(microagents)
+                session.microagents_loaded = True
+                session.reload_microagents = False
+                logger.info(f"Successfully loaded microagents for session {target_id}")
+                return True
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load microagents for session {target_id}: {e}"
+                )
+                logger.debug(f"Microagents loading error details: {e}", exc_info=True)
+                session.microagents_loaded = False
+                return False
+        return False
+
     def reload_session_microagents(self, session_id: Optional[str] = None) -> None:
         """Reload microagents for a session.
 
@@ -748,11 +846,13 @@ class SessionManager:
                 # Load microagents into memory
                 session.memory.load_user_workspace_microagents(microagents)
                 session.reload_microagents = False
+                session.microagents_loaded = True
                 logger.info(f"Reloaded microagents for session {target_id}")
             except Exception as e:
                 logger.error(
                     f"Failed to reload microagents for session {target_id}: {e}"
                 )
+                session.microagents_loaded = False
 
     def mark_session_for_microagent_reload(
         self, session_id: Optional[str] = None
@@ -801,6 +901,7 @@ class SessionManager:
             "message_count": session.message_count,
             "repo_directory": session.repo_directory,
             "reload_microagents": session.reload_microagents,
+            "microagents_loaded": session.microagents_loaded,
         }
 
     def get_all_session_statuses(self) -> List[Dict[str, Union[str, int, bool, float]]]:

@@ -82,9 +82,31 @@ class TestNetworkConnectivityChecker:
             result = NetworkConnectivityChecker.check_local_runtime_dependencies()
             assert result is False
 
+    def test_check_http_connectivity_success(self):
+        """Test successful HTTP connectivity check."""
+        with patch('httpx.Client') as mock_client:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_client.return_value.__enter__.return_value.get.return_value = mock_response
+            
+            result = NetworkConnectivityChecker.check_http_connectivity()
+            assert result is True
+
+    def test_check_http_connectivity_dns_error(self):
+        """Test HTTP connectivity check with DNS/hostname resolution error."""
+        with patch('httpx.Client') as mock_client:
+            # Simulate the specific "[Errno -8] Servname not supported for ai_socktype" error
+            mock_client.return_value.__enter__.return_value.get.side_effect = Exception(
+                "[Errno -8] Servname not supported for ai_socktype"
+            )
+            
+            result = NetworkConnectivityChecker.check_http_connectivity()
+            assert result is False
+
     def test_get_connectivity_status(self):
         """Test comprehensive connectivity status check."""
         with patch.object(NetworkConnectivityChecker, 'check_internet_connectivity', return_value=True), \
+             patch.object(NetworkConnectivityChecker, 'check_http_connectivity', return_value=True), \
              patch.object(NetworkConnectivityChecker, 'check_docker_availability', return_value=False), \
              patch.object(NetworkConnectivityChecker, 'check_local_runtime_dependencies', return_value=True):
             
@@ -92,6 +114,7 @@ class TestNetworkConnectivityChecker:
             
             expected = {
                 "internet": True,
+                "http": True,
                 "docker": False,
                 "local_runtime": True,
             }
@@ -110,17 +133,16 @@ class TestSessionManagerNetworkFeatures:
         config.sandbox.selected_repo = None
         config.jwt_secret = "test-secret"
         config.workspace_base = "/tmp/test"
-        config.tui_offline_mode = False
         return config
 
     @pytest.fixture
     def session_manager(self, mock_config):
         """Create a SessionManager instance."""
-        return SessionManager(mock_config, None)
+        return SessionManager(mock_config, None, offline_mode=False)
 
-    def test_should_use_offline_mode_explicit_config(self, session_manager):
-        """Test offline mode when explicitly enabled in config."""
-        session_manager.config.tui_offline_mode = True
+    def test_should_use_offline_mode_explicit_config(self, mock_config):
+        """Test offline mode when explicitly enabled."""
+        session_manager = SessionManager(mock_config, None, offline_mode=True)
         
         result = session_manager._should_use_offline_mode()
         assert result is True
@@ -130,6 +152,7 @@ class TestSessionManagerNetworkFeatures:
         session_manager.config.tui_offline_mode = False
         session_manager._connectivity_status = {
             "internet": True,
+            "http": True,
             "docker": False,
             "local_runtime": True,
         }
@@ -145,6 +168,22 @@ class TestSessionManagerNetworkFeatures:
         session_manager.config.tui_offline_mode = False
         session_manager._connectivity_status = {
             "internet": False,
+            "http": True,
+            "docker": True,
+            "local_runtime": True,
+        }
+        
+        # Mock time.time to prevent connectivity refresh
+        with patch('time.time', return_value=0.0):
+            session_manager._last_connectivity_check = 0.0
+            result = session_manager._should_use_offline_mode()
+            assert result is True
+
+    def test_should_use_offline_mode_http_connectivity_issues(self, session_manager):
+        """Test offline mode when HTTP connectivity fails (DNS/hostname issues)."""
+        session_manager._connectivity_status = {
+            "internet": True,
+            "http": False,
             "docker": True,
             "local_runtime": True,
         }
@@ -160,6 +199,7 @@ class TestSessionManagerNetworkFeatures:
         session_manager.config.tui_offline_mode = False
         session_manager._connectivity_status = {
             "internet": True,
+            "http": True,
             "docker": True,
             "local_runtime": True,
         }

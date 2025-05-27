@@ -69,10 +69,10 @@ def create_runtime(
 
     # runtime and tools
     runtime_cls = get_runtime_cls(config.runtime)
-    logger.debug(f'Initializing runtime: {runtime_cls.__name__}')
+    logger.debug(f"Initializing runtime: {runtime_cls.__name__}")
 
     # Get plugins, defaulting to empty list if not found (e.g. for mocks)
-    resolved_plugins = getattr(agent_cls, 'sandbox_plugins', [])
+    resolved_plugins = getattr(agent_cls, "sandbox_plugins", [])
 
     runtime: Runtime = runtime_cls(
         config=config,
@@ -83,7 +83,7 @@ def create_runtime(
     )
 
     logger.debug(
-        f'Runtime created with plugins: {[plugin.name for plugin in runtime.plugins]}'
+        f"Runtime created with plugins: {[plugin.name for plugin in runtime.plugins]}"
     )
 
     return runtime
@@ -103,12 +103,12 @@ def initialize_repository_for_runtime(
     """
     # clone selected repository if provided
     provider_tokens = {}
-    if 'GITHUB_TOKEN' in os.environ:
-        github_token = SecretStr(os.environ['GITHUB_TOKEN'])
+    if "GITHUB_TOKEN" in os.environ:
+        github_token = SecretStr(os.environ["GITHUB_TOKEN"])
         provider_tokens[ProviderType.GITHUB] = ProviderToken(token=github_token)
 
-    if 'GITLAB_TOKEN' in os.environ:
-        gitlab_token = SecretStr(os.environ['GITLAB_TOKEN'])
+    if "GITLAB_TOKEN" in os.environ:
+        gitlab_token = SecretStr(os.environ["GITLAB_TOKEN"])
         provider_tokens[ProviderType.GITLAB] = ProviderToken(token=gitlab_token)
 
     secret_store = (
@@ -116,7 +116,7 @@ def initialize_repository_for_runtime(
     )
     immutable_provider_tokens = secret_store.provider_tokens if secret_store else None
 
-    logger.debug(f'Selected repository {selected_repository}.')
+    logger.debug(f"Selected repository {selected_repository}.")
     repo_directory = call_async_from_sync(
         runtime.clone_or_init_repo,
         GENERAL_TIMEOUT,
@@ -165,10 +165,20 @@ def create_memory(
         memory.set_runtime_info(runtime, {})
 
         # loads microagents from repo/.openhands/microagents
-        microagents: list[BaseMicroagent] = runtime.get_microagents_from_selected_repo(
-            selected_repository
-        )
-        memory.load_user_workspace_microagents(microagents)
+        # Handle network connectivity issues gracefully during initial setup
+        try:
+            microagents: list[BaseMicroagent] = (
+                runtime.get_microagents_from_selected_repo(selected_repository)
+            )
+            memory.load_user_workspace_microagents(microagents)
+            logger.debug("Successfully loaded microagents during memory creation")
+        except Exception as e:
+            # Log the error but continue without microagents
+            # They can be loaded later when the runtime is properly connected
+            logger.warning(f"Failed to load microagents during memory creation: {e}")
+            logger.info("Microagents will be loaded later when runtime is connected")
+            # Set an empty list for now
+            memory.load_user_workspace_microagents([])
 
         if selected_repository and repo_directory:
             memory.set_repository_info(selected_repository, repo_directory)
@@ -200,13 +210,13 @@ def create_controller(
     initial_state = None
     try:
         logger.debug(
-            f'Trying to restore agent state from session {event_stream.sid} if available'
+            f"Trying to restore agent state from session {event_stream.sid} if available"
         )
         initial_state = State.restore_from_session(
             event_stream.sid, event_stream.file_store
         )
     except Exception as e:
-        logger.debug(f'Cannot restore agent state: {e}')
+        logger.debug(f"Cannot restore agent state: {e}")
 
     controller = AgentController(
         agent=agent,
@@ -227,5 +237,5 @@ def generate_sid(config: AppConfig, session_name: str | None = None) -> str:
     session_name = session_name or str(uuid.uuid4())
     jwt_secret = config.jwt_secret
 
-    hash_str = hashlib.sha256(f'{session_name}{jwt_secret}'.encode('utf-8')).hexdigest()
-    return f'{session_name}-{hash_str[:16]}'
+    hash_str = hashlib.sha256(f"{session_name}{jwt_secret}".encode("utf-8")).hexdigest()
+    return f"{session_name}-{hash_str[:16]}"

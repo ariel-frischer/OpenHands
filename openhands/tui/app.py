@@ -50,12 +50,10 @@ class OpenHandsTUIApp:
             "offline_mode": getattr(args, "tui_offline_mode", False) if args else False,
         }
 
-        # Set offline mode in config for session manager
-        if hasattr(config, "__dict__"):
-            config.tui_offline_mode = self.tui_settings["offline_mode"]
-
         # Initialize managers
-        self.session_manager = SessionManager(config, self.settings_store)
+        self.session_manager = SessionManager(
+            config, self.settings_store, offline_mode=self.tui_settings["offline_mode"]
+        )
         self.file_manager = TUIPanelFileManager()
         self.event_manager = TUIEventManager(
             self.session_manager, self.file_manager, self.config, self
