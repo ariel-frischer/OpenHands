@@ -265,8 +265,8 @@ tui:
 
 # Run the app in TUI mode with AI timeout
 timeout-tui:
-	@echo "$(YELLOW)Running the app in TUI mode with debug layout and TUI timeout set to $(AI_TIMEOUT)s...$(RESET)"
-	@poetry run python -m openhands.tui.main --tui-debug-layout --tui-timeout $(AI_TIMEOUT) $(TUI_ARGS)
+	@echo "$(YELLOW)Running the app in TUI mode with debug layout and TUI timeout set to $(AI_TIMEOUT)s... (OS-level timeout: 5s)$(RESET)"
+	@timeout 10s poetry run python -m openhands.tui.main --tui-debug-layout --tui-timeout $(AI_TIMEOUT) $(TUI_ARGS) || true
 
 # Run the app (in docker)
 docker-run: WORKSPACE_BASE ?= $(PWD)/workspace

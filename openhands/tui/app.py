@@ -81,45 +81,48 @@ class OpenHandsTUIApp:
         terminal_height = ptg.terminal.height
         logger.info(f"Terminal dimensions: {terminal_width}x{terminal_height}")
         
-        # Create header window
-        header = ptg.Window(
-            ptg.Label("[bold]OpenHands TUI v0.39[/bold]", parent_align=ptg.HorizontalAlignment.CENTER),
-            title="",
-            box="SINGLE"
-        )
-        
-        # Create a vertical container for the left column (sessions + logs)
+        # Create a vertical container for the left column (sessions + logs only)
         left_column = ptg.Container(
             self.sessions_panel,
             self.logs_panel
+        )
+        
+        # Create header as a separate container that will span both columns
+        header = ptg.Container(
+            ptg.Label("[bold]OpenHands TUI v0.39[/bold]", parent_align=ptg.HorizontalAlignment.CENTER)
+        )
+        
+        # Create a container for the chat panel with header
+        chat_column = ptg.Container(
+            header,
+            self.chat_panel
         )
         
         # Create left column window
         left_window = ptg.Window(
             left_column,
             title="",
-            box="SINGLE"
+            box="DOUBLE"
         )
         
-        # Create chat window
+        # Create chat window with header
         chat_window = ptg.Window(
-            self.chat_panel,
+            chat_column,
             title="",
-            box="SINGLE"
+            box="DOUBLE"
         )
         
         # Create window manager first
         self.manager = ptg.WindowManager()
         
-        # Add header window separately (not part of the responsive layout)
-        self.manager.add(header)
+        # Add only the layout windows (header is now part of left column)
         self.manager.add(left_window)
         self.manager.add(chat_window)
         
-        # Configure the layout with responsive slots
+        # Configure the layout with responsive slots to use full terminal height
         layout = self.manager.layout
         
-        # Add slots: left column (30%) and right column (70%), both using full height
+        # Add slots: left column (30%) and right column (70%), both using full terminal height
         layout.add_slot("left", width=0.3, height=1.0)
         layout.add_slot("right", width=0.7, height=1.0)
         
@@ -149,7 +152,7 @@ class OpenHandsTUIApp:
         self.left_window = left_window
         self.chat_window = chat_window
         self.layout = layout
-        self.window = header  # Keep for compatibility
+        self.window = left_window  # Keep for compatibility
             
     def setup_resize_handling(self) -> None:
         """Setup terminal resize detection and handling."""
