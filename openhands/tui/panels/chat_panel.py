@@ -117,8 +117,8 @@ class ChatPanel(BasePanel):
         self.input_field.bind(ptg.keys.ENTER, self.send_message_sync)
 
         self.send_button = ptg.Button("Send", self.send_message_sync)
-        self.pause_button = ptg.Button("Pause", self.pause_agent)
-        self.retry_button = ptg.Button("Retry", self.retry_last_message)
+        self.pause_button = ptg.Button("Pause", self.pause_agent_sync)
+        self.retry_button = ptg.Button("Retry", self.retry_last_message_sync)
         self.retry_button.styles.label = "yellow"  # Make retry button stand out
 
         # Status indicator for session readiness
@@ -662,8 +662,48 @@ class ChatPanel(BasePanel):
             # Reset the sending message flag
             self._sending_message = False
 
-    async def pause_agent(self) -> None:
-        """Pause active session agent."""
+    def pause_agent_sync(self, *args) -> None:
+        """Synchronous wrapper for pause_agent to work with PyTermGUI buttons.
+
+        Args:
+            *args: Arguments from PyTermGUI button callback (ignored)
+        """
+        try:
+            # Try to get the running event loop
+            try:
+                loop = asyncio.get_running_loop()
+                # Schedule pause as a background task
+                asyncio.create_task(self.pause_agent())
+            except RuntimeError:
+                # No running event loop, run in new loop
+                asyncio.run(self.pause_agent())
+        except Exception as e:
+            logger.error(f"Error pausing agent: {e}", exc_info=True)
+
+    def retry_last_message_sync(self, *args) -> None:
+        """Synchronous wrapper for retry_last_message to work with PyTermGUI buttons.
+
+        Args:
+            *args: Arguments from PyTermGUI button callback (ignored)
+        """
+        try:
+            # Try to get the running event loop
+            try:
+                loop = asyncio.get_running_loop()
+                # Schedule retry as a background task
+                asyncio.create_task(self.retry_last_message())
+            except RuntimeError:
+                # No running event loop, run in new loop
+                asyncio.run(self.retry_last_message())
+        except Exception as e:
+            logger.error(f"Error retrying message: {e}", exc_info=True)
+
+    async def pause_agent(self, *args) -> None:
+        """Pause active session agent.
+        
+        Args:
+            *args: Arguments from PyTermGUI button callback (ignored)
+        """
         logger.info("Pausing agent...")
 
         active_session = self.session_manager.get_active_session()
@@ -672,6 +712,39 @@ class ChatPanel(BasePanel):
             logger.info("Agent paused")
         else:
             logger.warning("No active session or controller to pause")
+
+    async def retry_last_message(self, *args) -> None:
+        """Retry the last user message.
+        
+        Args:
+            *args: Arguments from PyTermGUI button callback (ignored)
+        """
+        logger.info("Retrying last message...")
+        
+        active_session = self.session_manager.get_active_session()
+        if not active_session:
+            logger.warning("No active session to retry message")
+            return
+            
+        # Get the last user message from history
+        if hasattr(active_session, 'history') and active_session.history:
+            # Find the last user message
+            last_user_message = None
+            for event in reversed(active_session.history):
+                if hasattr(event, 'source') and event.source == 'user':
+                    last_user_message = getattr(event, 'message', None) or getattr(event, 'content', None)
+                    break
+            
+            if last_user_message:
+                logger.info(f"Retrying message: {last_user_message}")
+                # Resend the message
+                await self.send_message(last_user_message)
+            else:
+                logger.warning("No user message found to retry")
+                self._show_feedback("No previous message to retry", "warning")
+        else:
+            logger.warning("No message history available")
+            self._show_feedback("No message history available", "warning")
 
     def handle_key_event(self, key: str) -> bool:
         """Handle key events for the chat panel.

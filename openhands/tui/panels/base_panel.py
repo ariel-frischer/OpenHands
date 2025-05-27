@@ -34,9 +34,10 @@ class BasePanel(ptg.Container, ABC):
         self.title = title
         self._focused = False  # Track focus state
 
-        # Set height policy to fill available space in container (key for full height)
-        self.height_policy = ptg.SizePolicy.FILL
-        self.overflow = ptg.Overflow.SCROLL  # Allow scrolling if content exceeds panel height
+        # Use static size policy to ensure content is visible, but fill width
+        self.size_policy = ptg.SizePolicy.STATIC
+        self.width_policy = ptg.SizePolicy.FILL  # Fill the full width of the container
+        self.overflow = ptg.Overflow.RESIZE  # Resize to fit content
 
         # Add title label
         self += ptg.Label(f"[bold]{title}[/bold]")

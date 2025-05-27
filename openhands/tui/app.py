@@ -116,14 +116,13 @@ class OpenHandsTUIApp:
         terminal_height = ptg.terminal.height
         logger.info(f"Terminal dimensions: {terminal_width}x{terminal_height}")
 
-        # Create containers with proper height policies for full terminal height
+        # Create containers with default sizing to ensure content is visible
         left_column = ptg.Container(
             self.sessions_panel, 
             self.logs_panel,
         )
-        # Configure container for full height expansion
-        left_column.height_policy = ptg.SizePolicy.FILL  # Key: height_policy not size_policy
-        left_column.overflow = ptg.Overflow.SCROLL  # Prevent unwanted resizing
+        # Ensure left column distributes width to child panels
+        left_column.width_policy = ptg.SizePolicy.FILL
         
         header = ptg.Container(
             ptg.Label(
@@ -132,33 +131,75 @@ class OpenHandsTUIApp:
             )
         )
         
-        # Create windows for each section  
-        left_window = ptg.Window(left_column, title="", box="DOUBLE")
-        left_window.height_policy = ptg.SizePolicy.FILL  # Window should also fill height
+        # Create windows for each section with dragging disabled for fixed layout
+        left_window = ptg.Window(left_column, title="", box="DOUBLE", draggable=False)
         
-        right_window = ptg.Window(self.chat_panel, title="", box="DOUBLE") 
-        right_window.height_policy = ptg.SizePolicy.FILL  # Window should also fill height
+        right_window = ptg.Window(self.chat_panel, title="", box="DOUBLE", draggable=False) 
         
-        header_window = ptg.Window(header, title="", box="SINGLE")
+        # Header window without box to prevent text clipping, and ensure visibility
+        header_window = ptg.Window(header, title="", box="EMPTY", draggable=False)
 
-        # Create layout with proper slot heights to fill terminal
+        # Create layout with proper header sizing and debug logging
         self.layout = ptg.Layout()
         
-        # Header slot - small fixed height
-        self.layout.add_slot("header", width=1.0, height=3)
+        # Header slot - optimized height for more main content space
+        self.layout.add_slot("header", width=1.0, height=4)
+        logger.info(f"Added header slot: width=1.0, height=4")
         
-        # Main content slots - fill remaining height (height=1.0 means 100% of available)  
-        self.layout.add_row()
-        self.layout.add_slot("left", width=0.4, height=1.0)   # Key: height=1.0 fills terminal
-        self.layout.add_slot("right", width=0.6, height=1.0)  # Key: height=1.0 fills terminal
+        # Add a row break to put main content slots on the next row
+        self.layout.add_break()
+        
+        # Main content slots - default sizing for height, fixed width split
+        self.layout.add_slot("left", width=0.4)   
+        self.layout.add_slot("right", width=0.6)
+        logger.info(f"Added main content slots: left width=0.4, right width=0.6")
 
-        # Assign windows to slots
-        self.layout.assign(header_window, slot="header")
-        self.layout.assign(left_window, slot="left") 
-        self.layout.assign(right_window, slot="right")
+        # Assign windows to slots using correct PyTermGUI API with indices
+        self.layout.assign(header_window, index=0)  # Header slot (index 0)
+        self.layout.assign(left_window, index=1)    # Left slot (index 1) 
+        self.layout.assign(right_window, index=2)   # Right slot (index 2)
 
         # Apply layout to position and size everything
         self.layout.apply()
+
+        # Comprehensive debug logging of all sizes and positions
+        logger.info("=== LAYOUT DEBUG INFORMATION ===")
+        logger.info(f"Terminal size: {terminal_width}x{terminal_height}")
+        
+        # Debug slot information
+        try:
+            rows = self.layout.build_rows()
+            logger.info(f"Layout has {len(rows)} rows")
+            for i, row in enumerate(rows):
+                logger.info(f"Row {i}: {len(row)} slots")
+                for j, slot in enumerate(row):
+                    logger.info(f"  Slot {j} ({slot.name}): pos={getattr(slot, 'position', 'unknown')}, dim={getattr(slot, 'dimension', 'unknown')}")
+        except Exception as e:
+            logger.error(f"Error reading slot info: {e}")
+        
+        # Debug window information
+        try:
+            logger.info(f"Header window: pos={getattr(header_window, 'pos', 'unknown')}, size={getattr(header_window, 'width', 'unknown')}x{getattr(header_window, 'height', 'unknown')}")
+            logger.info(f"Left window: pos={getattr(left_window, 'pos', 'unknown')}, size={getattr(left_window, 'width', 'unknown')}x{getattr(left_window, 'height', 'unknown')}")
+            logger.info(f"Right window: pos={getattr(right_window, 'pos', 'unknown')}, size={getattr(right_window, 'width', 'unknown')}x{getattr(right_window, 'height', 'unknown')}")
+        except Exception as e:
+            logger.error(f"Error reading window info: {e}")
+            
+        # Debug container information
+        try:
+            logger.info(f"Left container: size={getattr(left_column, 'width', 'unknown')}x{getattr(left_column, 'height', 'unknown')}")
+            logger.info(f"Header container: size={getattr(header, 'width', 'unknown')}x{getattr(header, 'height', 'unknown')}")
+        except Exception as e:
+            logger.error(f"Error reading container info: {e}")
+            
+        # Debug panel information  
+        try:
+            logger.info(f"Sessions panel: size={getattr(self.sessions_panel, 'width', 'unknown')}x{getattr(self.sessions_panel, 'height', 'unknown')}, width_policy={getattr(self.sessions_panel, 'width_policy', 'unknown')}")
+            logger.info(f"Logs panel: size={getattr(self.logs_panel, 'width', 'unknown')}x{getattr(self.logs_panel, 'height', 'unknown')}, width_policy={getattr(self.logs_panel, 'width_policy', 'unknown')}")
+            logger.info(f"Chat panel: size={getattr(self.chat_panel, 'width', 'unknown')}x{getattr(self.chat_panel, 'height', 'unknown')}, width_policy={getattr(self.chat_panel, 'width_policy', 'unknown')}")
+        except Exception as e:
+            logger.error(f"Error reading panel info: {e}")
+        logger.info("=== END LAYOUT DEBUG ===")
 
         # Store references for resize handling
         self.left_column = left_column
@@ -179,6 +220,69 @@ class OpenHandsTUIApp:
 
         # Enhanced PyTermGUI debug logging
         self.debug_logger.log_layout_application(self.layout, "Initial layout setup")
+
+        # Initialize panel content to ensure text is visible
+        logger.info("Initializing panel content...")
+        try:
+            # Add test content to ensure visibility
+            self.sessions_panel += ptg.Label("Test: Sessions Panel Content")
+            self.sessions_panel += ptg.Label("- This should be visible")
+            self.logs_panel += ptg.Label("Test: Logs Panel Content") 
+            self.logs_panel += ptg.Label("- This should also be visible")
+            self.chat_panel += ptg.Label("Test: Chat Panel Content")
+            self.chat_panel += ptg.Label("- Ready for chat")
+            
+            # Also call the normal update methods
+            self.sessions_panel.update_display()
+            self.logs_panel.update_display()
+            self.chat_panel.update_display()
+            logger.info("Panel content initialized successfully")
+            
+            # Reapply layout to accommodate the new content
+            self.layout.apply()
+            logger.info("Layout reapplied after content initialization")
+            
+            # Force panels to use full container width and height
+            try:
+                # Get the left window/container dimensions after layout application
+                left_container_width = getattr(left_window, 'width', None)
+                left_container_height = getattr(left_window, 'height', None)
+                
+                # Get the right window/container dimensions
+                right_container_width = getattr(right_window, 'width', None)
+                right_container_height = getattr(right_window, 'height', None)
+                
+                if left_container_width and left_container_height:
+                    # Set left panels to use full width and split height of their container
+                    panel_width = left_container_width - 4  # Account for window box padding
+                    panel_height = (left_container_height - 6) // 2  # Split height between 2 panels, account for padding
+                    
+                    self.sessions_panel.width = panel_width
+                    self.sessions_panel.height = panel_height
+                    self.logs_panel.width = panel_width
+                    self.logs_panel.height = panel_height
+                    
+                    logger.info(f"Set left panel dimensions to {panel_width}x{panel_height} (container: {left_container_width}x{left_container_height})")
+                else:
+                    logger.warning("Could not determine left container dimensions")
+                    
+                if right_container_width and right_container_height:
+                    # Set chat panel to use maximum width and height of its container
+                    chat_width = right_container_width - 2  # Reduce padding for more space
+                    chat_height = right_container_height - 2  # Reduce padding for more height
+                    
+                    self.chat_panel.width = chat_width
+                    self.chat_panel.height = chat_height
+                    
+                    logger.info(f"Set chat panel dimensions to {chat_width}x{chat_height} (container: {right_container_width}x{right_container_height})")
+                else:
+                    logger.warning("Could not determine right container dimensions")
+                    
+            except Exception as e:
+                logger.error(f"Error setting panel dimensions: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error initializing panel content: {e}")
 
         # Setup PyTermGUI keybindings
         self.keybindings.setup_pytermgui_bindings()
@@ -214,6 +318,47 @@ class OpenHandsTUIApp:
                     
                     # Enhanced logging after layout application
                     self.debug_logger.log_layout_application(self.layout, "Resize layout update")
+                    
+                    # Debug logging for resize
+                    logger.info("=== RESIZE DEBUG INFORMATION ===")
+                    logger.info(f"New terminal size: {current_size[0]}x{current_size[1]}")
+                    try:
+                        rows = self.layout.build_rows()
+                        for i, row in enumerate(rows):
+                            for j, slot in enumerate(row):
+                                logger.info(f"  Slot {j} ({slot.name}): pos={getattr(slot, 'position', 'unknown')}, dim={getattr(slot, 'dimension', 'unknown')}")
+                    except Exception as e:
+                        logger.error(f"Error reading resize slot info: {e}")
+                    logger.info("=== END RESIZE DEBUG ===")
+                    
+                    # Recalculate and apply panel dimensions after resize
+                    try:
+                        # Get updated container dimensions
+                        left_container_width = getattr(self.left_window, 'width', None)
+                        left_container_height = getattr(self.left_window, 'height', None)
+                        right_container_width = getattr(self.right_window, 'width', None)
+                        right_container_height = getattr(self.right_window, 'height', None)
+                        
+                        if left_container_width and left_container_height:
+                            panel_width = left_container_width - 4
+                            panel_height = (left_container_height - 6) // 2
+                            
+                            self.sessions_panel.width = panel_width
+                            self.sessions_panel.height = panel_height
+                            self.logs_panel.width = panel_width
+                            self.logs_panel.height = panel_height
+                            
+                        if right_container_width and right_container_height:
+                            chat_width = right_container_width - 2
+                            chat_height = right_container_height - 2
+                            
+                            self.chat_panel.width = chat_width
+                            self.chat_panel.height = chat_height
+                            
+                        logger.info("Panel dimensions updated for resize")
+                    except Exception as e:
+                        logger.error(f"Error updating panel dimensions on resize: {e}")
+                    
                     logger.info("Layout reapplied successfully for terminal resize")
 
                 # Notify all panels of resize so they can update their content
@@ -291,6 +436,7 @@ class OpenHandsTUIApp:
             raise RuntimeError("Window manager not initialized")
 
         # Create auto-session in background (non-blocking)
+        auto_session_task = None
         if not self.tui_settings["debug_layout"]:
             logger.info("Normal mode: Creating auto-session in background")
             # Create auto-session task (non-blocking)
@@ -328,6 +474,8 @@ class OpenHandsTUIApp:
             resize_task.cancel()
             if timeout_task:
                 timeout_task.cancel()
+            if auto_session_task:
+                auto_session_task.cancel()
 
             # Clean up sessions and their background tasks
             try:
@@ -341,6 +489,8 @@ class OpenHandsTUIApp:
                 await resize_task
                 if timeout_task:
                     await timeout_task
+                if auto_session_task:
+                    await auto_session_task
             except asyncio.CancelledError:
                 logger.debug("Monitor tasks cancelled.")
 
@@ -394,33 +544,76 @@ class OpenHandsTUIApp:
             logger.error(f"Error in timeout monitor: {e}")
 
     async def _create_auto_session(self) -> None:
-        """Create session automatically in background with timeout handling."""
+        """Create session automatically in background with timeout handling and loading indicators."""
         try:
             logger.info("Creating auto-session in background...")
             
             # Wait a moment for UI to be fully ready
             await asyncio.sleep(0.5)
             
+            # Show loading status in sessions panel
+            if hasattr(self, 'sessions_panel') and self.sessions_panel:
+                self.sessions_panel.clear()
+                self.sessions_panel += ptg.Label("[bold yellow]⠋ Creating session...[/bold yellow]")
+            
+            # Get session name and task from args
+            session_name = getattr(self.args, 'name', '') or "default"
+            task_description = getattr(self.args, 'task', '') or "Ready to help!"
+            
             # Create session using the fixed session manager with timeout
             try:
                 session_id = await asyncio.wait_for(
-                    self.session_manager.create_session("Auto-created session"),
+                    self.session_manager.create_session(task_description, session_name),
                     timeout=60.0  # 60 second timeout for auto-session creation
                 )
                 logger.info(f"Auto-session {session_id} created successfully")
                 
-                # Update UI to show session is ready
+                # Update loading status
+                if hasattr(self, 'sessions_panel') and self.sessions_panel:
+                    self.sessions_panel.clear()
+                    self.sessions_panel += ptg.Label("[bold yellow]⠙ Starting session...[/bold yellow]")
+                
+                # Start the session with timeout
+                await asyncio.wait_for(
+                    self.session_manager.start_session(session_id),
+                    timeout=30.0  # 30 second timeout for session start
+                )
+                
+                # Switch to the new session
+                await self.session_manager.switch_session(session_id)
+                
+                # Clear loading status and update all panels
+                if hasattr(self, 'sessions_panel') and self.sessions_panel:
+                    self.sessions_panel.update_display()
+                
                 if hasattr(self, 'chat_panel') and self.chat_panel:
-                    # Update chat panel to show the new session
                     self.chat_panel.update_display(session_id)
                     
+                logger.info(f"Auto-session {session_id} started and activated successfully")
+                    
             except asyncio.TimeoutError:
-                logger.error("Auto-session creation timed out after 60 seconds")
+                error_msg = "Session creation timed out. Please try creating a session manually."
+                logger.error(error_msg)
+                
+                # Show error in sessions panel
+                if hasattr(self, 'sessions_panel') and self.sessions_panel:
+                    self.sessions_panel.clear()
+                    self.sessions_panel += ptg.Label(f"[bold red]✗ {error_msg}[/bold red]")
+                
+                # Also show in chat panel
                 if hasattr(self, 'chat_panel') and self.chat_panel:
-                    self.chat_panel._show_feedback("Auto-session creation timed out. You can create a session manually.", "error")
+                    self.chat_panel._show_feedback(error_msg, "error")
                 
         except Exception as e:
-            logger.error(f"Failed to create auto-session: {e}")
-            # Show error in UI but don't crash TUI
+            error_msg = f"Failed to create auto-session: {str(e)}"
+            logger.error(error_msg)
+            
+            # Show error in sessions panel
+            if hasattr(self, 'sessions_panel') and self.sessions_panel:
+                self.sessions_panel.clear()
+                self.sessions_panel += ptg.Label(f"[bold red]✗ Auto-session failed[/bold red]")
+                self.sessions_panel += ptg.Label(f"[dim]{str(e)}[/dim]")
+            
+            # Also show in chat panel
             if hasattr(self, 'chat_panel') and self.chat_panel:
-                self.chat_panel._show_feedback(f"Auto-session creation failed: {str(e)}", "error")
+                self.chat_panel._show_feedback(error_msg, "error")
