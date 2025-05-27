@@ -7,4 +7,4 @@ multiple concurrent sessions with a three-panel layout.
 from .app import OpenHandsTUIApp
 from .main import main
 
-__all__ = ['OpenHandsTUIApp', 'main']
+__all__ = ["OpenHandsTUIApp", "main"]

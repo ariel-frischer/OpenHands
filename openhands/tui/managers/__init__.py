@@ -7,4 +7,4 @@ from .event_manager import TUIEventManager
 from .file_manager import TUIPanelFileManager
 from .session_manager import SessionContext, SessionManager
 
-__all__ = ['SessionContext', 'SessionManager', 'TUIEventManager', 'TUIPanelFileManager']
+__all__ = ["SessionContext", "SessionManager", "TUIEventManager", "TUIPanelFileManager"]

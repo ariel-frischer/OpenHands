@@ -268,6 +268,20 @@ timeout-tui:
 	@echo "$(YELLOW)Running the app in TUI mode with debug layout and TUI timeout set to $(AI_TIMEOUT)s... (OS-level timeout: 5s)$(RESET)"
 	@timeout 10s poetry run python -m openhands.tui.main --tui-debug-layout --tui-timeout $(AI_TIMEOUT) $(TUI_ARGS) || true
 
+# Test TUI with proper logging and timeout
+test-tui:
+	@echo "$(YELLOW)Testing TUI with logging and timeout...$(RESET)"
+	@mkdir -p logs
+	@LOG_FILE="logs/tui_test_$$(date +%Y%m%d_%H%M%S).log"; \
+	echo "TUI test logs will be saved to: $$LOG_FILE"; \
+	timeout 15s poetry run python -m openhands.tui.main \
+		--tui-debug-layout \
+		--tui-log-level DEBUG \
+		--tui-timeout 12 \
+		$(TUI_ARGS) 2>&1 | tee "$$LOG_FILE"; \
+	echo "TUI test completed. Log file: $$LOG_FILE"; \
+	echo "Log file size: $$(wc -l < "$$LOG_FILE") lines"
+
 # Run the app (in docker)
 docker-run: WORKSPACE_BASE ?= $(PWD)/workspace
 docker-run:
@@ -351,9 +365,10 @@ help:
 	@echo "  $(GREEN)cli$(RESET)                 - Run the OpenHands application in CLI mode."
 	@echo "  $(GREEN)tui$(RESET)                 - Run the OpenHands application in TUI (Text User Interface) mode."
 	@echo "  $(GREEN)timeout-tui$(RESET)         - Run TUI mode with debug layout and TUI timeout (default: $(AI_TIMEOUT)s, override with AI_TIMEOUT=value)."
+	@echo "  $(GREEN)test-tui$(RESET)            - Test TUI with proper logging and timeout for development/debugging."
 	@echo "  $(GREEN)docker-dev$(RESET)          - Build and run the OpenHands application in Docker."
 	@echo "  $(GREEN)docker-run$(RESET)          - Run the OpenHands application, starting both backend and frontend servers in Docker."
 	@echo "  $(GREEN)help$(RESET)                - Display this help message, providing information on available targets."
 
 # Phony targets
-.PHONY: build check-dependencies check-system check-python check-npm check-nodejs check-docker check-poetry install-python-dependencies install-frontend-dependencies install-pre-commit-hooks lint-backend lint-frontend lint test-frontend test-backend test build-frontend start-backend start-frontend _run_setup run run-wsl cli tui timeout-tui setup-config setup-config-prompts setup-config-basic openhands-cloud-run docker-dev docker-run clean help
+.PHONY: build check-dependencies check-system check-python check-npm check-nodejs check-docker check-poetry install-python-dependencies install-frontend-dependencies install-pre-commit-hooks lint-backend lint-frontend lint test-frontend test-backend test build-frontend start-backend start-frontend _run_setup run run-wsl cli tui timeout-tui test-tui setup-config setup-config-prompts setup-config-basic openhands-cloud-run docker-dev docker-run clean help
