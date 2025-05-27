@@ -235,6 +235,9 @@ class EventStream(EventStore):
             except queue.Empty:
                 continue
 
+            if self._stop_flag.is_set():
+                break
+
             # pass each event to each callback in order
             for key in sorted(self._subscribers.keys()):
                 callbacks = self._subscribers[key]

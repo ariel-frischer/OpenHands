@@ -1,10 +1,17 @@
 import os
+import shutil
 import tempfile
 import time
+
+import pytest
 
 from openhands.core.logger import openhands_logger as logger
 from openhands.events.action import CmdRunAction
 from openhands.runtime.utils.bash import BashCommandStatus, BashSession
+
+# Skip all tests in this module if tmux is not installed
+if not shutil.which('tmux'):
+    pytest.skip("tmux not found, skipping bash session tests", allow_module_level=True)
 
 
 def test_session_initialization():

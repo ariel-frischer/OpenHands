@@ -9,6 +9,7 @@ FRONTEND_HOST ?= "127.0.0.1"
 FRONTEND_PORT = 3001
 DEFAULT_WORKSPACE_DIR = "./workspace"
 DEFAULT_MODEL = "gpt-4o"
+AI_TIMEOUT ?= 5 # Default AI timeout in seconds for TUI mode
 CONFIG_FILE = config.toml
 PRE_COMMIT_CONFIG_PATH = "./dev_config/python/.pre-commit-config.yaml"
 PYTHON_VERSION = 3.12
@@ -203,8 +204,13 @@ test-frontend:
 	@echo "$(YELLOW)Running tests for frontend...$(RESET)"
 	@cd frontend && npm run test
 
+test-backend:
+	@echo "$(YELLOW)Running tests for backend...$(RESET)"
+	@poetry run pytest tests/unit
+
 test:
 	@$(MAKE) -s test-frontend
+	@$(MAKE) -s test-backend
 
 build-frontend:
 	@echo "$(YELLOW)Building frontend...$(RESET)"
@@ -246,6 +252,21 @@ run:
 	@$(MAKE) -s _run_setup
 	@$(MAKE) -s start-frontend
 	@echo "$(GREEN)Application started successfully.$(RESET)"
+
+# Run the app in CLI mode
+cli:
+	@echo "$(YELLOW)Running the app in CLI mode...$(RESET)"
+	@poetry run python -m openhands.cli.main
+
+# Run the app in TUI mode
+tui:
+	@echo "$(YELLOW)Running the app in TUI mode...$(RESET)"
+	@poetry run python -m openhands.tui.main $(TUI_ARGS)
+
+# Run the app in TUI mode with AI timeout
+timeout-tui:
+	@echo "$(YELLOW)Running the app in TUI mode with debug layout and TUI timeout set to $(AI_TIMEOUT)s...$(RESET)"
+	@poetry run python -m openhands.tui.main --tui-debug-layout --tui-timeout $(AI_TIMEOUT) $(TUI_ARGS)
 
 # Run the app (in docker)
 docker-run: WORKSPACE_BASE ?= $(PWD)/workspace
@@ -327,9 +348,12 @@ help:
 	@echo "  $(GREEN)start-frontend$(RESET)      - Start the frontend server for the OpenHands project."
 	@echo "  $(GREEN)run$(RESET)                 - Run the OpenHands application, starting both backend and frontend servers."
 	@echo "                        Backend Log file will be stored in the 'logs' directory."
+	@echo "  $(GREEN)cli$(RESET)                 - Run the OpenHands application in CLI mode."
+	@echo "  $(GREEN)tui$(RESET)                 - Run the OpenHands application in TUI (Text User Interface) mode."
+	@echo "  $(GREEN)timeout-tui$(RESET)         - Run TUI mode with debug layout and TUI timeout (default: $(AI_TIMEOUT)s, override with AI_TIMEOUT=value)."
 	@echo "  $(GREEN)docker-dev$(RESET)          - Build and run the OpenHands application in Docker."
 	@echo "  $(GREEN)docker-run$(RESET)          - Run the OpenHands application, starting both backend and frontend servers in Docker."
 	@echo "  $(GREEN)help$(RESET)                - Display this help message, providing information on available targets."
 
 # Phony targets
-.PHONY: build check-dependencies check-system check-python check-npm check-nodejs check-docker check-poetry install-python-dependencies install-frontend-dependencies install-pre-commit-hooks lint-backend lint-frontend lint test-frontend test build-frontend start-backend start-frontend _run_setup run run-wsl setup-config setup-config-prompts setup-config-basic openhands-cloud-run docker-dev docker-run clean help
+.PHONY: build check-dependencies check-system check-python check-npm check-nodejs check-docker check-poetry install-python-dependencies install-frontend-dependencies install-pre-commit-hooks lint-backend lint-frontend lint test-frontend test-backend test build-frontend start-backend start-frontend _run_setup run run-wsl cli tui timeout-tui setup-config setup-config-prompts setup-config-basic openhands-cloud-run docker-dev docker-run clean help

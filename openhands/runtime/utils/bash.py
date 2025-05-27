@@ -247,6 +247,7 @@ class BashSession:
         # Maintain the current working directory
         self._cwd = os.path.abspath(self.work_dir)
         self._initialized = True
+        self._closed = False
 
     def __del__(self) -> None:
         """Ensure the session is closed when the object is destroyed."""
